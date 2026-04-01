@@ -1,0 +1,108 @@
+
+
+services:
+  # Node.js 서버
+  node:
+    build:
+      context: ./node-server
+      dockerfile: Dockerfile
+    container_name: auth_node
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=authpass
+      - MYSQL_DATABASE=authdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHON_RISK_URL=http://python:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./node-server:/app
+      - /app/node_modules
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+  # Python 리스크 계산 서버
+  python:
+    build:
+      context: ./python-risk
+      dockerfile: Dockerfile
+    container_name: auth_python
+    ports:
+      - "8000:8000"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=authpass
+      - MYSQL_DATABASE=authdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./python-risk:/app
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+  # MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: auth_mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpass
+      - MYSQL_DATABASE=authdb
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=authpass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uauthuser", "-pauthpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+  # Redis
+  redis:
+    image: redis:7.0-alpine
+    container_name: auth_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  auth_network:
+    driver: bridge
