@@ -1,22 +1,31 @@
 version: '3.8'
 services:
-  app:
+  auth-service:
     build: .
     ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-
+      - "8001:8000"
+  ml-service:
+    build: .
+    ports:
+      - "8002:8000"
+  api-server:
+    build: .
+    ports:
+      - "8003:8000"
   redis:
     image: redis:7.2
-    container_name: redis-container
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
+  mysql:
+    image: mysql:8.0
+    env_file: .env
+  elasticsearch:
+    image:
+  kibana:
+    image:
+  nginx:
+    image: nginx:alpine
+    ports: "8080:80"
+    
 
-volumes:
-  redis_data:
+    
