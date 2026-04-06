@@ -8,10 +8,6 @@ services:
     build: .
     ports:
       - "8002:8000"
-  api-server:
-    build: .
-    ports:
-      - "8003:8000"
   redis:
     image: redis:7.2
     ports:
