@@ -87,6 +87,44 @@ app.post('/login', async (req, res) => {
     }
 });
 
+// F-23 로그 중앙 집중화
+app.post('/logs', async (req, res) => {
+    const { source, level, message, meta } = req.body;
+
+    try {
+        // MySQL unified_logs 테이블에 저장
+        await db.execute(
+            `INSERT INTO unified_logs 
+            (source, level, message, meta) 
+            VALUES (?, ?, ?, ?)`,
+            [
+                source || 'unknown',
+                level || 'info',
+                message || '',
+                JSON.stringify(meta || {})
+            ]
+        );
+
+        // Redis에도 최근 로그 저장 (1시간)
+        await redis.setex(
+            `log:${source}:${Date.now()}`,
+            3600,
+            JSON.stringify({ source, level, message, meta })
+        );
+
+        res.json({ 
+            status: '로그 저장 완료',
+            source,
+            level,
+            message
+        });
+
+    } catch (error) {
+        console.error('로그 저장 오류:', error.message);
+        res.status(500).json({ error: '로그 저장 실패' });
+    }
+});
+
 app.listen(3000, () => {
     console.log('서버 실행중 → http://localhost:3000');
 });
