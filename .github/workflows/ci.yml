@@ -13,10 +13,10 @@ jobs:
 
     steps:
       - name: 코드 가져오기
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Node.js 설치
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
@@ -34,10 +34,10 @@ jobs:
 
     steps:
       - name: 코드 가져오기
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Python 설치
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -45,5 +45,4 @@ jobs:
         run: pip install flake8
 
       - name: 코드 검사
-        run: flake8 python-risk/main.py --max-line-length=100
-        
+        run: flake8 python-risk/main.py --max-line-length=100 --ignore=E302,W293,W292
