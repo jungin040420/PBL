@@ -1,0 +1,49 @@
+name: CI 파이프라인
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  node-lint:
+    name: Node.js 코드 검사
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Node.js 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 패키지 설치
+        working-directory: ./node-server
+        run: npm install
+
+      - name: 코드 검사
+        working-directory: ./node-server
+        run: node --check src/index.js
+
+  python-lint:
+    name: Python 코드 검사
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install flake8
+
+      - name: 코드 검사
+        run: flake8 python-risk/main.py --max-line-length=100 --ignore=E302,W293,W292,E271,E501,W291
+        
