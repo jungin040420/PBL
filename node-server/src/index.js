@@ -1,3 +1,10 @@
+require('dotenv').config({path: 'env.dev'});
+const app = require('./app'); // ← app.js 불러오기 
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`서버 실행 중: http://localhost:${PORT}`);
+});
+
 const express = require('express');
 const mysql = require('mysql2/promise');
 const Redis = require('ioredis');
