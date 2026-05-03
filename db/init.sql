@@ -1,3 +1,46 @@
+CREATE DATABASE IF NOT EXISTS mfa_db;
+USE mfa_db;
+
+CREATE TABLE IF NOT EXISTS users (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  username      VARCHAR(50)  NOT NULL UNIQUE,
+  display_name  VARCHAR(100) NOT NULL,
+  email         VARCHAR(100) NOT NULL UNIQUE,
+  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS passkeys (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  user_id        INT          NOT NULL,
+  credential_id  VARCHAR(500) NOT NULL UNIQUE,
+  public_key     TEXT         NOT NULL,
+  counter        INT          DEFAULT 0,
+  created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 세션 테이블(추후 코드 수정)
+--  - mysql과의 연동
+--  - 대시보드 연결
+--  - 기기 정보
+CREATE TABLE IF NOT EXISTS sessions (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  user_id       INT          NOT NULL,
+  session_token VARCHAR(500) NOT NULL UNIQUE,
+  ip_address    VARCHAR(50),   --  리스크 산출 파트 연동 시 필요
+  user_agent    TEXT,          --  리스크 산출 파트 연동 시 필요
+  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  expires_at    DATETIME,      --  TTL 정책 결정 후 설정
+
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+
+-- 연결 확인용 테스트 데이터 (나중에 삭제)
+INSERT INTO users (username, display_name, email)
+VALUES ('testuser', '테스트 유저', 'test@test.com');
+
 CREATE DATABASE IF NOT EXISTS authdb;
 USE authdb;
 
