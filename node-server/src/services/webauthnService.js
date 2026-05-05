@@ -11,6 +11,22 @@ exports.generateRegistrationOptions = async (username, displayName) => {
     .replace(/\//g, '_')
     .replace(/=/g, '');
 
+  console.log('저장할 username:', username);    
+  console.log('저장할 challenge:', challenge);  
+  console.log('Redis 연결 상태:', redisClient.isReady);
+
+  const setResult = await redisClient.set(
+    `challenge:${username}`,
+    challenge,
+    { EX: 300 }
+  );
+  console.log('set 결과:', setResult);
+  
+  const saved = await redisClient.get(`challenge:${username}`);
+  console.log('Redis에 저장된 값:', saved);        
+
+  const ttl = await redisClient.ttl(`challenge:${username}`);
+  console.log('TTL:', ttl);
   const userId = crypto.randomBytes(8).toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')

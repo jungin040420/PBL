@@ -2,9 +2,7 @@ const webauthnService = require('../services/webauthnService');
 const verificationService = require('../services/verificationService');
 const sessionManager = require('../services/sessionManager');
 
-// =========================================================
 // 등록 - 1단계: challenge 생성
-// =========================================================
 exports.registerStart = async (req, res) => {
   try {
     const { username, displayName, email } = req.body;
@@ -41,8 +39,10 @@ exports.registerStart = async (req, res) => {
 exports.registerFinish = async (req, res) => {
   try {
     const { username, credential } = req.body;
+    console.log('registerFinish username:', username); // ← 추가
+    console.log('registerFinish credential.id:', credential?.id); // ← 추가
 
-    // ✅ 그대로 사용 가능
+
     // verificationService에서 서명 검증 및 DB 저장
     const result = await verificationService.verifyRegistration(
       username,

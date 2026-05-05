@@ -13,9 +13,14 @@ const origin = process.env.ORIGIN || 'http://localhost:3000';
 
 // 등록 검증
 exports.verifyRegistration = async (username, credential) => {
+  console.log('verifyRegistration 실행됨');
+  console.log('username:', username);
+  console.log('credential:', credential);
 
-  // Redis에서 challenge 조회
+  // redis에서 challenge 조회
   const expectedChallenge = await redisClient.get(`challenge:${username}`);
+  console.log('expectedChallenge:', expectedChallenge);
+
   if (!expectedChallenge) {
     throw new Error('challenge 만료 또는 없음');
   }
