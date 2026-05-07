@@ -70,7 +70,7 @@ async function startPasskeyRegister() {
     await fetch('/auth/register/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({username, 
+      body: JSON.stringify({username, email,
           credential: {
             id: credential.id,
             rawId: toBase64url(credential.rawId),

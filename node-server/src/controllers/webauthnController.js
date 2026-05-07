@@ -38,14 +38,12 @@ exports.registerStart = async (req, res) => {
 
 exports.registerFinish = async (req, res) => {
   try {
-    const { username, credential } = req.body;
-    console.log('registerFinish username:', username); // ← 추가
-    console.log('registerFinish credential.id:', credential?.id); // ← 추가
-
+    const { username, email, credential } = req.body;
 
     // verificationService에서 서명 검증 및 DB 저장
     const result = await verificationService.verifyRegistration(
       username,
+      email,
       credential
     );
 
@@ -115,7 +113,7 @@ exports.loginFinish = async (req, res) => {
     //   - HTTPS 환경에서는 secure: true 필수
     res.cookie('session', session.token, {
       httpOnly: true,   // JS에서 접근 불가
-      secure: false,    // ⚠️ 운영환경에서는 반드시 true로 변경
+      secure: false,    //운영환경에서는 반드시 true로 변경
       sameSite: 'strict',
       maxAge: 1000 * 60 * 60, // 1시간
     });

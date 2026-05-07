@@ -5,6 +5,7 @@ const {
   verifyAuthenticationResponse 
 } = require('@simplewebauthn/server');
 const { db, redisClient } = require('../../config/db');
+const { RootNodesUnavailableError } = require('redis');
 
 const rpID = process.env.RP_ID || 'localhost';
 const rpName = 'MFA 보안 시스템';
@@ -12,10 +13,7 @@ const origin = process.env.ORIGIN || 'http://localhost:3000';
 
 
 // 등록 검증
-exports.verifyRegistration = async (username, credential) => {
-  console.log('verifyRegistration 실행됨');
-  console.log('username:', username);
-  console.log('credential:', credential);
+exports.verifyRegistration = async (username, email, credential) => {
 
   // redis에서 challenge 조회
   const expectedChallenge = await redisClient.get(`challenge:${username}`);
@@ -49,13 +47,15 @@ exports.verifyRegistration = async (username, credential) => {
     //   - 실패 횟수 기록 (brute force 방지)
     //   - 의심스러운 요청 로깅
     console.error('등록 서명 검증 오류:', error);
+    console.error('오류 메시지:', error.message);
+    console.error('오류 스택:', error.stack);
     throw new Error('서명 검증 실패');
   }
 
   if (!verification.verified) {
     return { verified: false };
   }
-
+  
   const { registrationInfo } = verification;
   const {
     credential: {
@@ -74,7 +74,7 @@ exports.verifyRegistration = async (username, credential) => {
   if (userRows.length === 0) {
     const [result] = await db.query(
       'INSERT INTO users (username, display_name, email) VALUES (?, ?, ?)',
-      [username, username, '']
+      [username, username, email || null]
     );
     userId = result.insertId;
   } else {
@@ -94,11 +94,12 @@ exports.verifyRegistration = async (username, credential) => {
      VALUES (?, ?, ?, ?)`,
     [
       userId,
-      Buffer.from(credentialID).toString('base64url'),
+      credentialID,
       Buffer.from(credentialPublicKey).toString('base64url'),
       counter,
     ]
   );
+
 
   await redisClient.del(`challenge:${username}`);
 

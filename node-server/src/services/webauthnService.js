@@ -11,29 +11,17 @@ exports.generateRegistrationOptions = async (username, displayName) => {
     .replace(/\//g, '_')
     .replace(/=/g, '');
 
-  console.log('저장할 username:', username);    
-  console.log('저장할 challenge:', challenge);  
-  console.log('Redis 연결 상태:', redisClient.isReady);
-
-  const setResult = await redisClient.set(
-    `challenge:${username}`,
-    challenge,
-    { EX: 300 }
-  );
-  console.log('set 결과:', setResult);
+  const setResult = await redisClient.set(`challenge:${username}`, challenge, {EX: 300});
   
-  const saved = await redisClient.get(`challenge:${username}`);
-  console.log('Redis에 저장된 값:', saved);        
+  const saved = await redisClient.get(`challenge:${username}`);    
 
   const ttl = await redisClient.ttl(`challenge:${username}`);
   console.log('TTL:', ttl);
+  
   const userId = crypto.randomBytes(8).toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=/g, '');
-
-  //challenge 저장
-  await redisClient.set('challenge:${username}', challenge, {EX: 300});
 
   return { challenge, userId, rpId, };
 };
@@ -44,7 +32,10 @@ exports.generateLoginOptions = async (username) => {
     .replace(/\//g, '_')
     .replace(/=/g, '');
   //challenge 저장
-  await redisClient.set('challenge:${username}', challenge, {EX: 300});
+  const setResult = await redisClient.set(`challenge:${username}`, challenge, {EX: 300});
+
+  const saved = await redisClient.get(`challenge:${username}`);
+
   const [rows] = await db.query(
     `SELECT p.credential_id FROM passkeys p
      JOIN users u ON p.user_id = u.id
@@ -52,10 +43,16 @@ exports.generateLoginOptions = async (username) => {
     [username]
   ); 
 
+  console.log('조회 결과 rows:', rows);
+
   const allowCredentials = rows.map(row => ({
     id: row.credential_id,
     type: 'public-key',
   })); 
+
+  // 정상 실행 시 삭제
+  console.log('DB에서 조회된 rows:', rows);
+  console.log('allowCredentials:', allowCredentials);
 
   return { challenge, rpId, allowCredentials};
 };
