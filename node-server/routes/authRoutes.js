@@ -7,6 +7,7 @@ router.use((req, res, next) => {
   console.log('요청 들어옴:', req.method, req.path);
   next();
 });
+router.post('/logout', authController.logout);
 
 const authController = require('../src/controllers/webauthnController');
 

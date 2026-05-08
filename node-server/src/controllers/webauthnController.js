@@ -125,3 +125,18 @@ exports.loginFinish = async (req, res) => {
     return res.status(500).json({ error: '서버 오류' });
   }
 };
+
+//logout
+exports.logout = async (req, res) => {
+  try {
+    const sessionToken = req.cookies.session;
+    if (sessionToken) {
+      await sessionManager.deleteSession(sessionToken);
+    }
+    res.clearCookie('session');
+    return res.status(200).json({ success: true, message: '로그아웃 완료' });
+  } catch (error) {
+    console.error('logout 오류:', error);
+    return res.status(500).json({ error: '서버 오류' });
+  }
+};
