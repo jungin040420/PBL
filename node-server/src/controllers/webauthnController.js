@@ -140,3 +140,22 @@ exports.logout = async (req, res) => {
     return res.status(500).json({ error: '서버 오류' });
   }
 };
+
+exports.verifySession = async (req, res) => {
+  try {
+    const sessionToken = req.cookies.session;
+    if (!sessionToken) {
+      return res.status(401).json({ error: '토큰 없음' });
+    }
+
+    const result = await sessionManager.verifySession(sessionToken);
+    if (!result.valid) {
+      return res.status(401).json({ error: result.reason || '세션 만료' });
+    }
+
+    return res.status(200).json({ success: true, username: result.username });
+  } catch (error) {
+    console.error('verifySession 오류:', error);
+    return res.status(500).json({ error: '서버 오류' });
+  }
+};

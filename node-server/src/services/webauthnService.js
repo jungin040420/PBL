@@ -43,16 +43,10 @@ exports.generateLoginOptions = async (username) => {
     [username]
   ); 
 
-  console.log('조회 결과 rows:', rows);
-
   const allowCredentials = rows.map(row => ({
     id: row.credential_id,
     type: 'public-key',
   })); 
-
-  // 정상 실행 시 삭제
-  console.log('DB에서 조회된 rows:', rows);
-  console.log('allowCredentials:', allowCredentials);
 
   return { challenge, rpId, allowCredentials};
 };
