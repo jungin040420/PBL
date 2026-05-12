@@ -38,12 +38,13 @@ exports.registerStart = async (req, res) => {
 
 exports.registerFinish = async (req, res) => {
   try {
-    const { username, email, credential } = req.body;
-
+    const { username, email, challengeId, credential } = req.body;
+    console.log('challengeId:', challengeId);
     // verificationService에서 서명 검증 및 DB 저장
     const result = await verificationService.verifyRegistration(
       username,
       email,
+      challengeId,
       credential
     );
 
@@ -90,10 +91,12 @@ exports.loginStart = async (req, res) => {
 //서명 검증 및 세션 발급
 exports.loginFinish = async (req, res) => {
   try {
-    const { username, credential } = req.body;
+    const { username, challengeId, credential } = req.body;
+    console.log('challengeId:', challengeId);
 
     const result = await verificationService.verifyLogin(
       username,
+      challengeId,
       credential
     );
 
@@ -140,6 +143,7 @@ exports.logout = async (req, res) => {
     return res.status(500).json({ error: '서버 오류' });
   }
 };
+
 
 exports.verifySession = async (req, res) => {
   try {

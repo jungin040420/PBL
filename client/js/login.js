@@ -33,6 +33,8 @@ async function startPasskeyLogin() {
       body: JSON.stringify({ username }),
     });
     const options = await res.json();
+    console.log('서버 응답 options:', options); // ← 확인용
+    console.log('options.challengeId:', options.challengeId);
 
     const rpId = window.location.hostname;
 
@@ -50,23 +52,25 @@ async function startPasskeyLogin() {
     });
 
     setStatus('로그인 확인 중...');
+    console.log('전송할 challengeId:', options.challengeId);
     const loginRes = await fetch('/auth/login/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username,
+        challengeId: options.challengeId, // ← 추가
         credential: {
           id: credential.id,
-          rawId: toBase64url(credential.rawId),      
+          rawId: toBase64url(credential.rawId),
           type: credential.type,
           response: {
-            clientDataJSON: toBase64url(           
+            clientDataJSON: toBase64url(
               credential.response.clientDataJSON
             ),
-            authenticatorData: toBase64url(           
+            authenticatorData: toBase64url(
               credential.response.authenticatorData
             ),
-            signature: toBase64url(                       
+            signature: toBase64url(
               credential.response.signature
             ),
           },
@@ -74,10 +78,11 @@ async function startPasskeyLogin() {
       }),
     });
     const loginResult = await loginRes.json();
+    console.log('로그인 결과:', loginResult); // ← 확인용
 
     if (loginResult.success) {
       setStatus('로그인 성공!');
-      // 코드 추가
+      // 직접 구현 권장
       // location.href = '/dashboard.html';
     } else {
       setStatus('로그인 실패: ' + loginResult.error);

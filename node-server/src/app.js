@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const authMiddleware = require('../src/authMiddleware');
 
 const app = express();
+app.set('trust proxy', 1);
 
 app.use(cors());
 app.use(express.json());
