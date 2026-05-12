@@ -1,20 +1,4 @@
-const path = require('path');
-
-require('dotenv').config({ 
-  path: path.join(__dirname, '../.env.dev')
-});
-
-console.log('RP_ID:', process.env.RP_ID);
-console.log('ORIGIN:', process.env.ORIGIN);
-
-const app = require('./app');
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`서버 실행 중: http://localhost:${PORT}`);
-});
-
-/* const express = require('express');
+const express = require('express');
 const mysql = require('mysql2/promise');
 const Redis = require('ioredis');
 const axios = require('axios');
@@ -41,6 +25,7 @@ app.get('/', (req, res) => {
     res.json({ status: 'Node.js 서버 실행중' });
 });
 
+// F-22 멀티 소스 로그 수집
 app.post('/login', async (req, res) => {
     const ip = req.ip;
     const ua = req.headers['user-agent'];
@@ -48,7 +33,7 @@ app.post('/login', async (req, res) => {
     const userId = req.body.user_id || 'unknown';
 
     try {
-        // 1. Redis에 임시 저장
+        // 1. Redis에 임시 저장 (10분)
         await redis.setex(
             `login:${userId}`,
             600,
@@ -57,7 +42,7 @@ app.post('/login', async (req, res) => {
 
         // 2. Python 리스크 점수 계산
         const riskResponse = await axios.post(
-            `${process.env.PYTHON_RISK_URL}/risk`,
+            `${process.env.PYTHON_RISK_URL || 'http://python-risk:8000'}/risk`,
             {
                 user_id: userId,
                 ip: ip,
@@ -83,11 +68,9 @@ app.post('/login', async (req, res) => {
             `INSERT INTO risk_scores 
             (user_id, ip, device, score, reason) 
             VALUES (?, ?, ?, ?, ?)`,
-            [userId, ip, ua, riskData.score, 
+            [userId, ip, ua, riskData.score,
              JSON.stringify(riskData.triggers)]
         );
-
-        console.log('로그인 요청:', { ip, ua, time, risk: riskData });
 
         res.json({
             message: '로그인 시도 기록됨',
@@ -108,7 +91,7 @@ app.post('/logs', async (req, res) => {
     const { source, level, message, meta } = req.body;
 
     try {
-        // MySQL unified_logs 테이블에 저장
+        // MySQL에 영구 저장
         await db.execute(
             `INSERT INTO unified_logs 
             (source, level, message, meta) 
@@ -121,14 +104,14 @@ app.post('/logs', async (req, res) => {
             ]
         );
 
-        // Redis에도 최근 로그 저장 (1시간)
+        // Redis에 최근 로그 저장 (1시간)
         await redis.setex(
             `log:${source}:${Date.now()}`,
             3600,
             JSON.stringify({ source, level, message, meta })
         );
 
-        res.json({ 
+        res.json({
             status: '로그 저장 완료',
             source,
             level,
@@ -143,4 +126,4 @@ app.post('/logs', async (req, res) => {
 
 app.listen(3000, () => {
     console.log('서버 실행중 → http://localhost:3000');
-}); */
+});
