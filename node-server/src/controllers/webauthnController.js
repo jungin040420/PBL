@@ -117,7 +117,7 @@ exports.loginFinish = async (req, res) => {
     res.cookie('session', session.token, {
       httpOnly: true,   // JS에서 접근 불가
       secure: false,    //운영환경에서는 반드시 true로 변경
-      sameSite: 'strict',
+      sameSite: 'lax',
       maxAge: 1000 * 60 * 60, // 1시간
     });
 

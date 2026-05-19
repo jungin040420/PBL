@@ -1,4 +1,21 @@
-const express = require('express');
+//테스트용
+const path = require('path');
+const dotenv = require('dotenv');
+dotenv.config({ 
+  path: 'C:\\Users\\SEOJIN\\PBL\\node-server\\.env.dev'
+});
+
+console.log('RP_ID:', process.env.RP_ID);
+console.log('ORIGIN:', process.env.ORIGIN);
+
+const app = require('./app');
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`서버 실행 중: http://localhost:${PORT}`);
+});
+
+/* const express = require('express');
 const mysql = require('mysql2/promise');
 const Redis = require('ioredis');
 const axios = require('axios');
@@ -126,4 +143,4 @@ app.post('/logs', async (req, res) => {
 
 app.listen(3000, () => {
     console.log('서버 실행중 → http://localhost:3000');
-});
+}); */

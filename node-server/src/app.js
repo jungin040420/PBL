@@ -30,5 +30,7 @@ app.use('/auth', require('../routes/authRoutes'));
 /* // 로그인 필요한 라우트에만 적용
 // 예: 대시보드, 마이페이지 등
 app.use('/api/dashboard', authMiddleware, require('../routes/dashboardRoutes')); */
-
+app.get('/api/me', authMiddleware, (req, res) => {
+  res.json({ message: '세션 유효', username: req.username });
+});
 module.exports = app;
