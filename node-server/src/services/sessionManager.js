@@ -13,16 +13,20 @@ exports.createSession = async (username, ip, deviceId) => {
 };
 
 exports.verifySession = async (token) => {
+  const decodedToken = decodeURIComponent(token);
+  console.log('verifySession 호출됨, token:', token);
 
-  const isBlacklisted = await redisClient.get(`blacklist:${token}`);
+  const isBlacklisted = await redisClient.get(`blacklist:${decodedToken}`);
   if (isBlacklisted) {
     return { valid: false, reason: '블랙리스트 토큰' };
   }
 
-  const [tokenUsername, tokenSessionId] = token.split(':');
-    if (!tokenUsername || !tokenSessionId) {
-      return { valid: false };
-    }
+  const [tokenUsername, ...rest] = decodedToken.split(':');
+  const tokenSessionId = rest.join(':');
+  
+  if (!tokenUsername || !tokenSessionId) {
+    return { valid: false };
+  }
 
   const session = await refreshSession(tokenUsername, tokenSessionId);
   if (!session) {

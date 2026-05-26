@@ -1,7 +1,4 @@
 {
   "dependencies": {
-    "cookie-parser": "^1.4.7",
-    "express-rate-limit": "^8.5.1",
-    "uuid": "^14.0.0"
   }
 }

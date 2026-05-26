@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
-const authMiddleware = require('../src/authMiddleware');
+const authMiddleware = require('../src/middleware/authMiddleware');
 
 const app = express();
 app.set('trust proxy', 1);

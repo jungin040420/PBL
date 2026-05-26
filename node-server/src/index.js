@@ -2,7 +2,7 @@
 const path = require('path');
 const dotenv = require('dotenv');
 dotenv.config({ 
-  path: path.join(__dirname, '../../.env.dev')
+  path: path.join(__dirname, '../.env.dev')
 });
 
 console.log('RP_ID:', process.env.RP_ID);
