@@ -1,44 +1,51 @@
-const crypto = require('crypto');
-const { redisClient } = require('../../config/db');
+const { redisClient } = require('../../config/db'); 
+const {
+  createSession,
+  refreshSession,
+  updateSessionStatus,
+  deleteSession: _deleteSession
+} = require('./session');
 
-exports.createSession = async (username) => {
-  const sessionToken = crypto.randomBytes(32).toString('hex');
-  const TTL = 60 * 60;
-
-  await redisClient.set(
-    `session:${sessionToken}`,
-    JSON.stringify({ username, createdAt: new Date().toISOString() }),
-    { EX: TTL }
-  );
-
-  return { token: sessionToken };
+exports.createSession = async (username, ip, deviceId) => {
+  const sessionId = await createSession(username, ip, deviceId);
+  const token = `${username}:${sessionId}`;
+  return { token };
 };
 
-exports.verifySession = async (sessionToken) => {
-  const isBlacklisted = await redisClient.get(`blacklist:${sessionToken}`);
+exports.verifySession = async (token) => {
+
+  const isBlacklisted = await redisClient.get(`blacklist:${token}`);
   if (isBlacklisted) {
     return { valid: false, reason: '블랙리스트 토큰' };
   }
 
-  const data = await redisClient.get(`session:${sessionToken}`);
-  if (!data) {
+  const [tokenUsername, tokenSessionId] = token.split(':');
+    if (!tokenUsername || !tokenSessionId) {
+      return { valid: false };
+    }
+
+  const session = await refreshSession(tokenUsername, tokenSessionId);
+  if (!session) {
     return { valid: false };
   }
 
-  return { valid: true, username: JSON.parse(data).username };
+  return { valid: true, username: tokenUsername };
 };
 
-exports.deleteSession = async (sessionToken) => {
-  const ttl = await redisClient.ttl(`session:${sessionToken}`);
-  
+exports.deleteSession = async (token) => {
+  const [tokenUsername, tokenSessionId] = token.split(':');
+
+  const ttl = await redisClient.ttl(`session:${tokenUsername}:${tokenSessionId}`);
+
   if (ttl > 0) {
     await redisClient.set(
-      `blacklist:${sessionToken}`,
+      `blacklist:${token}`,
       '1',
-      { EX: ttl } 
+      { EX: ttl }
     );
   }
-  await redisClient.del(`session:${sessionToken}`);
   
+  await _deleteSession(tokenUsername, tokenSessionId);
+
   return { success: true };
 };

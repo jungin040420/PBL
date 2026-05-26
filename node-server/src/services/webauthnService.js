@@ -1,52 +1,52 @@
-// webauthnService.js
 const crypto = require('crypto');
 const { db, redisClient } = require('../../config/db');
+const { storeChallenge } = require('./challenge'); // ← 상단으로 이동
 const rpId = process.env.RP_ID || 'localhost';
 
 exports.generateRegistrationOptions = async (username, displayName) => {
-  // 랜덤 challenge 생성 후 base64로 변환
-  const challenge = crypto.randomBytes(32)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
 
-  const setResult = await redisClient.set(`challenge:${username}`, challenge, {EX: 300});
+  const { challengeId, challengeValue } = await storeChallenge(username);
+
+  const userId = crypto.randomBytes(8).toString('base64url');
+
   
-  const saved = await redisClient.get(`challenge:${username}`);    
 
-  const ttl = await redisClient.ttl(`challenge:${username}`);
-  console.log('TTL:', ttl);
-  
-  const userId = crypto.randomBytes(8).toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-
-  return { challenge, userId, rpId, };
+  return { 
+    challenge: challengeValue,
+    challengeId,
+    userId,
+    rpId,
+  };
 };
 
 exports.generateLoginOptions = async (username) => {
-  const challenge = crypto.randomBytes(32).toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-  //challenge 저장
-  const setResult = await redisClient.set(`challenge:${username}`, challenge, {EX: 300});
 
-  const saved = await redisClient.get(`challenge:${username}`);
+  const storeResult = await storeChallenge(username);
+  console.log('storeChallenge 반환값:', storeResult);
+
+  const { challengeId, challengeValue } = await storeChallenge(username);
+  console.log('challengeId:', challengeId);            // ← 추가
+  console.log('challengeValue:', challengeValue);
 
   const [rows] = await db.query(
     `SELECT p.credential_id FROM passkeys p
      JOIN users u ON p.user_id = u.id
-     WHERE u.username = ?`,
+     WHERE u.username = ?
+     AND p.is_active = 1`,
     [username]
-  ); 
+  );
 
   const allowCredentials = rows.map(row => ({
     id: row.credential_id,
     type: 'public-key',
-  })); 
+  }));
 
-  return { challenge, rpId, allowCredentials};
+  console.log('반환할 challengeId:', challengeId);
+
+  return { 
+    challenge: challengeValue,
+    challengeId,
+    rpId,
+    allowCredentials,
+  };
 };

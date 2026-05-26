@@ -23,7 +23,10 @@ const storeChallenge = async (userId) => {
 // challenge 검증 + 사용 처리 (재사용 공격 방지)
 const verifyChallenge = async (userId, challengeId, submittedValue) => {
   const key = `challenge:${userId}:${challengeId}`;
+  console.log('조회할 key:', key);
+
   const raw = await redisClient.get(key);
+  console.log('Redis에서 조회된 값:', raw);
 
   if (!raw) return { valid: false, reason: 'EXPIRED_OR_NOT_FOUND' };
 

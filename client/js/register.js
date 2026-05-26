@@ -11,7 +11,7 @@ function setStatus(msg) {
 }
 
 function base64ToUint8Array(base64url) {
-  const base64 = base64url          // 파라미터: base64url, 변수: base64
+  const base64 = base64url
     .replace(/-/g, '+')
     .replace(/_/g, '/')
     .padEnd(base64url.length + (4 - base64url.length % 4) % 4, '=');
@@ -70,16 +70,23 @@ async function startPasskeyRegister() {
     await fetch('/auth/register/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({username, email,
-          credential: {
-            id: credential.id,
-            rawId: toBase64url(credential.rawId),
-            type: credential.type,
-            response: {
-              clientDataJSON: toBase64url(credential.response.clientDataJSON),
-                attestationObject: toBase64url(credential.response.attestationObject),
-            },
-          },  
+      body: JSON.stringify({
+        username,
+        email,
+        challengeId: options.challengeId, // ← 추가
+        credential: {
+          id: credential.id,
+          rawId: toBase64url(credential.rawId),
+          type: credential.type,
+          response: {
+            clientDataJSON: toBase64url(
+              credential.response.clientDataJSON
+            ),
+            attestationObject: toBase64url(
+              credential.response.attestationObject
+            ),
+          },
+        },
       }),
     });
 

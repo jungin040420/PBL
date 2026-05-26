@@ -38,12 +38,13 @@ exports.registerStart = async (req, res) => {
 
 exports.registerFinish = async (req, res) => {
   try {
-    const { username, email, credential } = req.body;
-
+    const { username, email, challengeId, credential } = req.body;
+    console.log('challengeId:', challengeId);
     // verificationService에서 서명 검증 및 DB 저장
     const result = await verificationService.verifyRegistration(
       username,
       email,
+      challengeId,
       credential
     );
 
@@ -90,10 +91,15 @@ exports.loginStart = async (req, res) => {
 //서명 검증 및 세션 발급
 exports.loginFinish = async (req, res) => {
   try {
-    const { username, credential } = req.body;
+    const { username, challengeId, credential } = req.body;
+    console.log('challengeId:', challengeId);
+
+    const context = req.context || {};
+    console.log('로그인 콘텍스트: ', context);
 
     const result = await verificationService.verifyLogin(
       username,
+      challengeId,
       credential
     );
 
@@ -106,7 +112,9 @@ exports.loginFinish = async (req, res) => {
     //   - JWT vs 서버 세션 방식 결정
     //   - 세션 만료 시간 설정
     //   - 로그인 성공 기록 저장 (대시보드 연동용)
-    const session = await sessionManager.createSession(username);
+    const session = await sessionManager.createSession(
+      username, context.ip, context.userAgent
+    );
 
     // **추후 코드 수정**
     //   - httpOnly, secure, sameSite 옵션 설정
@@ -114,11 +122,17 @@ exports.loginFinish = async (req, res) => {
     res.cookie('session', session.token, {
       httpOnly: true,   // JS에서 접근 불가
       secure: false,    //운영환경에서는 반드시 true로 변경
-      sameSite: 'strict',
+      sameSite: 'lax',
       maxAge: 1000 * 60 * 60, // 1시간
     });
 
-    return res.status(200).json({ success: true, message: '로그인 성공' });
+    return res.status(200).json({ success: true, message: '로그인 성공', 
+      context: {
+        deviceType: context.deviceInfo?.deviceType,
+        os: context.deviceInfo?.os,
+        isNightAccess: context.isNightAccess
+      }
+    });
 
   } catch (error) {
     console.error('loginFinish 오류:', error);
@@ -140,6 +154,7 @@ exports.logout = async (req, res) => {
     return res.status(500).json({ error: '서버 오류' });
   }
 };
+
 
 exports.verifySession = async (req, res) => {
   try {
