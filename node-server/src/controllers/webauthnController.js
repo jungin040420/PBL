@@ -1,7 +1,67 @@
 const webauthnService = require('../services/webauthnService');
 const verificationService = require('../services/verificationService');
 const sessionManager = require('../services/sessionManager');
+const crypto = require('crypto');
+const axios = require('axios');
+function hashData(data) {
+  return crypto
+    .createHash('sha256')
+    .update(String(data))
+    .digest('hex');
+}
 
+function calculateRiskScore(ip, userAgent, time) {
+  let score = 0;
+
+  if (
+    ip.includes('127.0.0.1') ||
+    ip.includes('::1') ||
+    ip.includes('172.') ||
+    ip.includes('192.168')
+  ) {
+    score += 10;
+  } else {
+    score += 30;
+  }
+
+  const hour = time.getHours();
+
+  if (hour >= 0 && hour < 6) {
+    score += 30;
+  } else if (hour >= 22) {
+    score += 20;
+  } else {
+    score += 5;
+  }
+
+  if (userAgent.includes('Windows')) {
+    score += 5;
+  } else if (userAgent.includes('Mobile')) {
+    score += 15;
+  } else {
+    score += 20;
+  }
+
+  return score;
+}
+
+function calculateRiskLevel(score) {
+  if (score < 30) return 'LOW';
+  if (score < 60) return 'MEDIUM';
+  return 'HIGH';
+}
+
+async function sendLog(log) {
+  try {
+    await axios.post(
+      'http://elasticsearch:9200/auth-logs/_doc',
+      log
+    );
+    console.log('로그 전송 성공');
+  } catch (e) {
+    console.error('로그 전송 실패', e.message);
+  }
+}
 // 등록 - 1단계: challenge 생성
 exports.registerStart = async (req, res) => {
   try {
@@ -114,6 +174,24 @@ exports.loginFinish = async (req, res) => {
     // **추후 코드 수정**
     //   - httpOnly, secure, sameSite 옵션 설정
     //   - HTTPS 환경에서는 secure: true 필수
+        const ip = req.ip;
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+    const time = new Date();
+
+    const riskScore = calculateRiskScore(ip, userAgent, time);
+    const riskLevel = calculateRiskLevel(riskScore);
+
+    await sendLog({
+      timestamp: time,
+      expire_at: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
+      user_id: hashData(username),
+      event_type: 'real_login_attempt',
+      ip_address: hashData(ip),
+      user_agent: userAgent,
+      risk_score: riskScore,
+      risk_level: riskLevel,
+      risk_reason: 'IP, 시간대, 기기 정보 기반 위험도 산출'
+    });
     res.cookie('session', session.token, {
       httpOnly: true,   // JS에서 접근 불가
       secure: false,    //운영환경에서는 반드시 true로 변경
