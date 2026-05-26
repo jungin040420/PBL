@@ -1,4 +1,4 @@
-const sessionManager = require('./services/sessionManager');
+const sessionManager = require('../services/sessionManager');
 
 module.exports = async (req, res, next) => {
   try {

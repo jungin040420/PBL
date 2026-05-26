@@ -94,6 +94,9 @@ exports.loginFinish = async (req, res) => {
     const { username, challengeId, credential } = req.body;
     console.log('challengeId:', challengeId);
 
+    const context = req.context || {};
+    console.log('로그인 콘텍스트: ', context);
+
     const result = await verificationService.verifyLogin(
       username,
       challengeId,
@@ -109,7 +112,9 @@ exports.loginFinish = async (req, res) => {
     //   - JWT vs 서버 세션 방식 결정
     //   - 세션 만료 시간 설정
     //   - 로그인 성공 기록 저장 (대시보드 연동용)
-    const session = await sessionManager.createSession(username);
+    const session = await sessionManager.createSession(
+      username, context.ip, context.userAgent
+    );
 
     // **추후 코드 수정**
     //   - httpOnly, secure, sameSite 옵션 설정
@@ -121,7 +126,13 @@ exports.loginFinish = async (req, res) => {
       maxAge: 1000 * 60 * 60, // 1시간
     });
 
-    return res.status(200).json({ success: true, message: '로그인 성공' });
+    return res.status(200).json({ success: true, message: '로그인 성공', 
+      context: {
+        deviceType: context.deviceInfo?.deviceType,
+        os: context.deviceInfo?.os,
+        isNightAccess: context.isNightAccess
+      }
+    });
 
   } catch (error) {
     console.error('loginFinish 오류:', error);
