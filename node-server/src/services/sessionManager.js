@@ -24,8 +24,8 @@ exports.verifySession = async (token) => {
       return { valid: false };
     }
 
-  const data = await redisClient.get(`session:${tokenUsername}:${tokenSessionId}`);
-  if (!data) {
+  const session = await refreshSession(tokenUsername, tokenSessionId);
+  if (!session) {
     return { valid: false };
   }
 

@@ -1,6 +1,7 @@
 const mysql = require('mysql2/promise');
 const redis = require('redis');
 
+//MySQL
 const db = mysql.createPool({
   host:     process.env.DB_HOST     || 'localhost',
   user:     process.env.DB_USER     || 'root',
@@ -19,6 +20,7 @@ const testDBConnection = async () => {
 };
 testDBConnection();
 
+//Redis
 const redisClient = redis.createClient({
   socket: {
     host: process.env.REDIS_HOST || 'localhost',
