@@ -27,9 +27,9 @@ app.get('/', (req, res) => {
 
 // F-22 멀티 소스 로그 수집
 app.post('/login', async (req, res) => {
-    const ip = req.ip;
-    const ua = req.headers['user-agent'];
-    const time = new Date();
+    const ip = req.ip; //IP 자동 수집 
+    const ua = req.headers['user-agent']; //기기 자동 수집
+    const time = new Date(); //시간 자동 수집
     const userId = req.body.user_id || 'unknown';
 
     try {

@@ -1,35 +1,34 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from app.feature import extract_features
+from app.detector import detect_suspicious
 
 app = FastAPI()
 
-class LogData(BaseModel):
+class RiskRequest(BaseModel):
     user_id: str
     ip: str
     device: str
+    country: str = "KR"
+    login_failures: int = 0
+    is_phishing_url: bool = False
+    is_new_device: bool = False
 
 @app.get("/")
-def read_root():
+def root():
     return {"status": "Python 리스크 서버 실행중"}
 
 @app.post("/risk")
-def calculate_risk(data: LogData):
-    score = 0
+def calculate_risk(req: RiskRequest):
+    # 1. 데이터 가공 (feature.py)
+    features = extract_features(req.dict())
     
-    # 알 수 없는 IP면 점수 추가
-    known_ips = ["127.0.0.1", "localhost"]
-    if data.ip not in known_ips:
-        score += 50
-    
-    # 알 수 없는 기기면 점수 추가
-    known_devices = ["Chrome", "Firefox", "Safari"]
-    if not any(d in data.device for d in known_devices):
-        score += 30
-    
+    # 2. 위험도 판단 (detector.py)
+    result = detect_suspicious(features)
+
     return {
-        "user_id": data.user_id,
-        "ip": data.ip,
-        "device": data.device,
-        "score": score,
-        "level": "high" if score >= 50 else "low"
+        "user_id": req.user_id,
+        "score": result["score"],
+        "triggers": result["triggers"],
+        "level": result["level"]
     }
