@@ -3,3 +3,6 @@ python-risk/__pycache__/
 ml-service/__pycache__/
 api-server/__pycache__/
 .env
+.env.dev
+.env.prod
+.env.*
