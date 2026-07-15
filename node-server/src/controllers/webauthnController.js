@@ -3,6 +3,8 @@ const verificationService = require('../services/verificationService');
 const sessionManager = require('../services/sessionManager');
 const crypto = require('crypto');
 const axios = require('axios');
+const sendRiskData = require{'../services/riskService'};
+
 function hashData(data) {
   return crypto
     .createHash('sha256')
@@ -99,7 +101,6 @@ exports.registerStart = async (req, res) => {
 exports.registerFinish = async (req, res) => {
   try {
     const { username, email, challengeId, credential } = req.body;
-    console.log('challengeId:', challengeId);
     // verificationService에서 서명 검증 및 DB 저장
     const result = await verificationService.verifyRegistration(
       username,
@@ -152,19 +153,31 @@ exports.loginStart = async (req, res) => {
 exports.loginFinish = async (req, res) => {
   try {
     const { username, challengeId, credential } = req.body;
-    console.log('challengeId:', challengeId);
-
     const context = req.context || {};
-    console.log('로그인 콘텍스트: ', context);
-
     const result = await verificationService.verifyLogin(
       username,
       challengeId,
       credential
     );
+    console.log('verifyLogin 결과:', result);
 
     if (!result.verified) {
       return res.status(401).json({ error: '로그인 검증 실패' });
+    }
+
+    let riskScore = 0;
+    let riskLevel = 'Low'
+
+    try {
+      const riskResult = await sendRiskData(username, context);
+      riskScore = riskResult.score;
+      riskLevel = riskResult.level;
+      console.log('리스크 스코어:', riskScore, riskLevel);
+    } catch (error) {
+      // 직접 구현 권장
+      // 리스크 서버 연결 실패 시 처리 방식 결정 필요
+      // 지금은 기본값 사용
+      console.error('리스크 스코어 요청 실패:', error.message);
     }
 
     // **추후 코드 수정**
@@ -175,6 +188,7 @@ exports.loginFinish = async (req, res) => {
     const session = await sessionManager.createSession(
       username, context.ip, context.userAgent
     );
+    console.log('세션 생성 결과:', session);
 
     // **추후 코드 수정**
     //   - httpOnly, secure, sameSite 옵션 설정
@@ -197,10 +211,13 @@ exports.loginFinish = async (req, res) => {
       risk_level: riskLevel,
       risk_reason: 'IP, 시간대, 기기 정보 기반 위험도 산출'
     });
+
+    const isNgrok = req.headers.host?.includes('ngrok');
+
     res.cookie('session', session.token, {
       httpOnly: true,   // JS에서 접근 불가
-      secure: false,    //운영환경에서는 반드시 true로 변경
-      sameSite: 'lax',
+      secure: isNgrok ? true : false,    //운영환경에서는 반드시 true로 변경
+      sameSite: isNgrok ? 'none' : 'lax',
       maxAge: 1000 * 60 * 60, // 1시간
     });
 
@@ -209,7 +226,9 @@ exports.loginFinish = async (req, res) => {
         deviceType: context.deviceInfo?.deviceType,
         os: context.deviceInfo?.os,
         isNightAccess: context.isNightAccess
-      }
+      },
+      riskScore,
+      riskLevel
     });
 
   } catch (error) {

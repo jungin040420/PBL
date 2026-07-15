@@ -7,19 +7,14 @@ const { verifyChallenge } = require('./challenge');
 
 const rpID = process.env.RP_ID || 'localhost';
 
-// =========================================================
-// 등록 검증
-// =========================================================
 exports.verifyRegistration = async (username, email, challengeId, credential) => {
 
-  // ✅ clientDataJSON에서 challenge 추출
   const clientDataJSON = JSON.parse(
     Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8')
   );
   const submittedChallenge = clientDataJSON.challenge;
   console.log('submittedChallenge:', submittedChallenge);
 
-  // ✅ 팀원 코드로 challenge 검증
   const challengeResult = await verifyChallenge(
     username,
     challengeId,
@@ -36,9 +31,10 @@ exports.verifyRegistration = async (username, email, challengeId, credential) =>
   try {
     verification = await verifyRegistrationResponse({
       response: credential,
-      expectedChallenge: submittedChallenge, // ← 수정
+      expectedChallenge: submittedChallenge,
       expectedOrigin,
       expectedRPID: rpID,
+      requireUserVerification: false
     });
   } catch (error) {
     console.error('등록 서명 검증 오류:', error);
@@ -90,20 +86,14 @@ exports.verifyRegistration = async (username, email, challengeId, credential) =>
   return { verified: true };
 };
 
-
-// =========================================================
-// 로그인 검증
-// =========================================================
 exports.verifyLogin = async (username, challengeId, credential) => {
 
-  // ✅ clientDataJSON에서 challenge 추출
   const clientDataJSON = JSON.parse(
     Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8')
   );
   const submittedChallenge = clientDataJSON.challenge;
   console.log('submittedChallenge:', submittedChallenge);
 
-  // ✅ 팀원 코드로 challenge 검증
   const challengeResult = await verifyChallenge(
     username,
     challengeId,
@@ -133,9 +123,10 @@ exports.verifyLogin = async (username, challengeId, credential) => {
   try {
     verification = await verifyAuthenticationResponse({
       response: credential,
-      expectedChallenge: submittedChallenge, // ← 수정
+      expectedChallenge: submittedChallenge, 
       expectedOrigin,
       expectedRPID: rpID,
+      requireUserVerification: false,
       credential: {
         id: Buffer.from(passkey.credential_id, 'base64url'),
         publicKey: Buffer.from(passkey.public_key, 'base64url'),

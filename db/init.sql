@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_device TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip TEXT;
 
 -- 연결 확인용 테스트 데이터 (나중에 삭제)
 INSERT INTO users (username, display_name, email)

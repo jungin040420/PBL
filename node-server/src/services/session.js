@@ -58,6 +58,12 @@ const updateSessionStatus = async (userId, sessionId, status) => {
 
   // TTL 유지하면서 값만 업데이트
   const remainingTTL = await redisClient.ttl(key);
+
+  if (remainingTTL <= 0) {
+    await redisClient.del(key);
+    return false;
+  }
+    
   await redisClient.set(key, JSON.stringify(session), { EX: remainingTTL });
   return true;
 };
