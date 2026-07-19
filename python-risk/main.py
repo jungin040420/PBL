@@ -22,7 +22,10 @@ class LogData(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "Python 리스크 서버 실행중"}
+    return {"status": "Python 리스크 서버 실행중",
+    "api: "POST /analyze",
+    "docs": "/docs"
+    }
 
 @app.post("/analyze")
 def calculate_risk(data: LogData):

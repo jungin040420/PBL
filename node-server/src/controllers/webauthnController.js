@@ -3,67 +3,72 @@ const verificationService = require('../services/verificationService');
 const sessionManager = require('../services/sessionManager');
 const crypto = require('crypto');
 const axios = require('axios');
-const sendRiskData = require{'../services/riskService'};
+const {sendRiskData} = require('../services/riskService');
+const { redisClient } = require('../../config/db');
+const { db } = require('../../config/db');
 
-function hashData(data) {
-  return crypto
-    .createHash('sha256')
-    .update(String(data))
-    .digest('hex');
-}
+console.log('sendRiskData 타입:', typeof sendRiskData);
 
-function calculateRiskScore(ip, userAgent, time) {
-  let score = 0;
+// function hashData(data) {
+//   return crypto
+//     .createHash('sha256')
+//     .update(String(data))
+//     .digest('hex');
+// }
 
-  if (
-    ip.includes('127.0.0.1') ||
-    ip.includes('::1') ||
-    ip.includes('172.') ||
-    ip.includes('192.168')
-  ) {
-    score += 10;
-  } else {
-    score += 30;
-  }
+// function calculateRiskScore(ip, userAgent, time) {
+//   let score = 0;
 
-  const hour = time.getHours();
+//   if (
+//     ip.includes('127.0.0.1') ||
+//     ip.includes('::1') ||
+//     ip.includes('172.') ||
+//     ip.includes('192.168')
+//   ) {
+//     score += 10;
+//   } else {
+//     score += 30;
+//   }
 
-  if (hour >= 0 && hour < 6) {
-    score += 30;
-  } else if (hour >= 22) {
-    score += 20;
-  } else {
-    score += 5;
-  }
+//   const hour = time.getHours();
 
-  if (userAgent.includes('Windows')) {
-    score += 5;
-  } else if (userAgent.includes('Mobile')) {
-    score += 15;
-  } else {
-    score += 20;
-  }
+//   if (hour >= 0 && hour < 6) {
+//     score += 30;
+//   } else if (hour >= 22) {
+//     score += 20;
+//   } else {
+//     score += 5;
+//   }
 
-  return score;
-}
+//   if (userAgent.includes('Windows')) {
+//     score += 5;
+//   } else if (userAgent.includes('Mobile')) {
+//     score += 15;
+//   } else {
+//     score += 20;
+//   }
 
-function calculateRiskLevel(score) {
-  if (score < 30) return 'LOW';
-  if (score < 60) return 'MEDIUM';
-  return 'HIGH';
-}
+//   return score;
+// }
 
-async function sendLog(log) {
-  try {
-    await axios.post(
-      'http://elasticsearch:9200/auth-logs/_doc',
-      log
-    );
-    console.log('로그 전송 성공');
-  } catch (e) {
-    console.error('로그 전송 실패', e.message);
-  }
-}
+// function calculateRiskLevel(score) {
+//   if (score < 30) return 'LOW';
+//   if (score < 60) return 'MEDIUM';
+//   return 'HIGH';
+// }
+
+// async function sendLog(log) {
+//   try {
+//     await axios.post(
+//       'http://elasticsearch:9200/auth-logs/_doc',
+//       log
+//     );
+//     console.log('로그 전송 성공');
+//   } catch (e) {
+//     console.error('로그 전송 실패', e.message);
+//   }
+// }
+
 // 등록 - 1단계: challenge 생성
 exports.registerStart = async (req, res) => {
   try {
@@ -79,8 +84,7 @@ exports.registerStart = async (req, res) => {
     }
 
     const options = await webauthnService.generateRegistrationOptions(
-      username,
-      displayName
+      username, displayName
     );
 
     return res.status(200).json(options);
@@ -138,6 +142,13 @@ exports.loginStart = async (req, res) => {
       return res.status(400).json({ error: '아이디를 입력하세요' });
     }
 
+    // loginStart에서 시작 시간 저장
+    await redisClient.set(
+      `challenge:time:${username}`,
+      Date.now(),
+      { EX: 300 }
+    );
+
     const options = await webauthnService.generateLoginOptions(username);
 
     return res.status(200).json(options);
@@ -154,16 +165,61 @@ exports.loginFinish = async (req, res) => {
   try {
     const { username, challengeId, credential } = req.body;
     const context = req.context || {};
+
+    // loginFinish에서 시간 차이 계산
+    const startTime = await redisClient.get(`challenge:time:${username}`);
+    const challengeResponseTime = startTime?Date.now() - parseInt(startTime): null;
+
+    context.challengeResponseTime = challengeResponseTime;
+    await redisClient.del(`challenge:time:${username}`);
+
     const result = await verificationService.verifyLogin(
       username,
       challengeId,
       credential
     );
+
     console.log('verifyLogin 결과:', result);
 
+    // 로그인 실패 시
     if (!result.verified) {
+      await redisClient.incr(`login:fail:${username}`);
+      await redisClient.expire(`login:fail:${username}`, 3600);
       return res.status(401).json({ error: '로그인 검증 실패' });
     }
+
+    //실패 횟수 조회
+    const failedLoginCount = parseInt(
+      await redisClient.get(`login:fail:${username}`)
+    ) || 0;
+    context.failedLoginCount = failedLoginCount;
+    await redisClient.del(`login:fail:${username}`);
+
+    // 기기 변경 여부 확인
+    const [rows] = await db.query(
+    'SELECT last_device FROM users WHERE username = ?',
+    [username]
+    );
+    
+    context.deviceChanged = rows[0]?.last_device !== context.userAgent;
+    context.ipChanged = rows[0]?.last_ip !== context.ip;
+    context.userAgentChanged = rows[0]?.last_user_agent !== context.userAgent;
+
+    const deviceChanged = rows[0]?.last_device !== context.userAgent;
+    context.deviceChanged = deviceChanged;
+
+    // 현재 기기 정보 업데이트
+    await db.query(
+    'UPDATE users SET last_device = ? WHERE username = ?',
+    [context.userAgent, username]
+    );
+
+    //로그인 빈도
+    const loginFrequency = await redisClient.incr(`login:count:${username}`);
+    await redisClient.expire(`login:count:${username}`, 3600);
+    context.loginFrequency = loginFrequency;
+
+    context.loginFrequency = loginFrequency;
 
     let riskScore = 0;
     let riskLevel = 'Low'
@@ -174,10 +230,8 @@ exports.loginFinish = async (req, res) => {
       riskLevel = riskResult.level;
       console.log('리스크 스코어:', riskScore, riskLevel);
     } catch (error) {
-      // 직접 구현 권장
-      // 리스크 서버 연결 실패 시 처리 방식 결정 필요
-      // 지금은 기본값 사용
       console.error('리스크 스코어 요청 실패:', error.message);
+      console.error(error.stack);
     }
 
     // **추후 코드 수정**
@@ -193,24 +247,21 @@ exports.loginFinish = async (req, res) => {
     // **추후 코드 수정**
     //   - httpOnly, secure, sameSite 옵션 설정
     //   - HTTPS 환경에서는 secure: true 필수
-        const ip = req.ip;
+    const ip = req.ip;
     const userAgent = req.headers['user-agent'] || 'Unknown';
     const time = new Date();
 
-    const riskScore = calculateRiskScore(ip, userAgent, time);
-    const riskLevel = calculateRiskLevel(riskScore);
-
-    await sendLog({
-      timestamp: time,
-      expire_at: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
-      user_id: hashData(username),
-      event_type: 'real_login_attempt',
-      ip_address: hashData(ip),
-      user_agent: userAgent,
-      risk_score: riskScore,
-      risk_level: riskLevel,
-      risk_reason: 'IP, 시간대, 기기 정보 기반 위험도 산출'
-    });
+    // await sendLog({
+    //   timestamp: time,
+    //   expire_at: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
+    //   user_id: hashData(username),
+    //   event_type: 'real_login_attempt',
+    //   ip_address: hashData(ip),
+    //   user_agent: userAgent,
+    //   risk_score: riskScore,
+    //   risk_level: riskLevel,
+    //   risk_reason: 'IP, 시간대, 기기 정보 기반 위험도 산출'
+    // });
 
     const isNgrok = req.headers.host?.includes('ngrok');
 
