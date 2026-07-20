@@ -67,7 +67,7 @@ class RiskResponse(BaseModel):
 def read_root():
     return {
         "status": "Python 리스크 서버 실행 중",
-        "api": "POST /risk",
+        "api": "POST /rgisk",
         "docs": "/docs",
     }
 
