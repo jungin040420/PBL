@@ -183,6 +183,9 @@ app.post("/login", async (req, res) => {
   const logData = {
     timestamp: time.toISOString(),
 
+    // 로그 발생 위치
+    source: "node-auth-server",
+
     expire_at: new Date(
         Date.now() + 7 * 24 * 60 * 60 * 1000
     ).toISOString(),
