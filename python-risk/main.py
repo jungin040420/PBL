@@ -1,6 +1,10 @@
+import requests
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 
@@ -9,6 +13,39 @@ app = FastAPI(
     description="로그인 Feature를 이용해 Risk Score와 인증 정책을 계산합니다.",
     version="1.0.0",
 )
+
+LOG_FILE = Path("risk_logs.jsonl")
+
+
+def save_risk_log(data: "LogData", response: "RiskResponse"):
+    log = {
+        "timestamp": datetime.now().isoformat(),
+        "source": "python-risk-engine",
+        "event_type": "risk_analysis",
+        "user_id": data.user_id,
+        "ip": data.ip,
+        "device": data.device,
+        "risk_score": response.risk_score,
+        "risk_level": response.risk_level,
+        "authentication_action": response.authentication_action,
+        "triggers": response.triggers,
+        "feature_scores": response.feature_scores,
+    }
+
+    with LOG_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(log, ensure_ascii=False) + "\n")
+
+    try:
+        response = requests.post(
+            "http://localhost:9200/risk-logs/_doc",
+            json=log,
+            timeout=3
+        )
+        response.raise_for_status()
+        print("Python 로그 Elasticsearch 저장 성공")
+
+    except requests.RequestException as e:
+        print("Python 로그 Elasticsearch 저장 실패:", e)
 
 
 class LogData(BaseModel):
@@ -240,7 +277,7 @@ def calculate_risk(data: LogData):
     if not triggers:
         triggers.append("NO_RISK_DETECTED")
 
-    return RiskResponse(
+    response = RiskResponse(
         user_id=data.user_id,
         ip=data.ip,
         device=data.device,
@@ -251,3 +288,7 @@ def calculate_risk(data: LogData):
         triggers=triggers,
         feature_scores=feature_scores,
     )
+
+    save_risk_log(data, response)
+
+    return response
