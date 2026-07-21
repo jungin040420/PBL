@@ -5,7 +5,82 @@ services:
     image: nginx:latest
     container_name: nginx
     ports:
+<<<<<<< HEAD
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=authpass
+      - MYSQL_DATABASE=authdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHON_RISK_URL=http://python:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./node-server:/app
+      - /app/node_modules
+    networks:
+      - dev-network
+    restart: unless-stopped
+    deploy:
+      update_config:
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+
+  python:
+    build:
+      context: ./python-risk
+      dockerfile: Dockerfile
+    container_name: auth_python
+    ports:
+      - "8000:8000"
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=authpass
+      - MYSQL_DATABASE=authdb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./python-risk:/app
+    networks:
+      - dev-network
+    restart: unless-stopped
+    deploy:
+      update_config:
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    volumes:
+      - ./ml-service:/app
+    command: python main.py --reload
+    networks:
+      - dev-network
+=======
       - "80:80"
+>>>>>>> feature/loginpage
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0

@@ -1,0 +1,54 @@
+<!-- 들록 페이지 -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!--   <meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self';
+  style-src 'self';
+  connect-src 'self' http://localhost:3000;"> -->
+  <title>계정 등록 | MFA 보안 시스템</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+  <div class="page">
+    <div class="logo">
+      <h1>MFA 보안 시스템</h1>
+    </div>
+
+    <div class="card">
+      <h2>계정 등록</h2>
+      <p>정보를 입력하고 Passkey로 등록하세요</p>
+
+      <div class="field">
+        <label for="username">아이디</label>
+        <input type="text" id="username" autocomplete="username" />
+      </div>
+
+      <div class="field">
+        <label for="displayName">이름</label>
+        <input type="text" id="displayName" autocomplete="name" />
+      </div>
+
+      <div class="field">
+        <label for="email">이메일</label>
+        <input type="email" id="email" placeholder="예: user@example.com" autocomplete="email" />
+      </div>
+
+      <button id="btn-passkey" onclick="startPasskeyRegister()">
+        Passkey로 등록 (생체인증)
+      </button>
+
+      <div id="status"></div>
+    </div>
+
+    <p>이미 계정이 있으신가요? <a href="./login.html">로그인</a></p>
+  </div>
+
+  <!-- register.js 연결 -->
+  <script src="/js/register.js"></script>
+</body>
+</html>
