@@ -25,6 +25,7 @@ def save_risk_log(data: "LogData", response: "RiskResponse"):
         "user_id": data.user_id,
         "ip": data.ip,
         "device": data.device,
+        "is_new_user": data.is_new_user,
         "risk_score": response.risk_score,
         "risk_level": response.risk_level,
         "authentication_action": response.authentication_action,
@@ -62,6 +63,7 @@ class LogData(BaseModel):
     user_agent_changed: bool = False
     is_new_device: bool = False
     location_changed: bool = False
+    is_new_user: bool = False
 
     challenge_response_time: Optional[float] = Field(
         default=None,
@@ -242,6 +244,12 @@ def calculate_risk(data: LogData):
         score += location_score
         triggers.append("LOCATION_CHANGED")
         feature_scores["location_changed"] = location_score
+        # 7. 신규 사용자
+        if data.is_new_user:
+            new_user_score = 10
+            score += new_user_score
+            triggers.append("NEW_USER")
+            feature_scores["is_new_user"] = new_user_score
 
     # 7. 해외 접속
     if data.country.upper() != "KR":
