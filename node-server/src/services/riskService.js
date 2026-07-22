@@ -3,7 +3,7 @@ const axios = require('axios');
 // 데이터 전달
 const sendRiskData = async (username, context) => {
   const payload = {
-    user_id,
+    username,
     ip: context.ip,
     userAgent: context.userAgent,
     deviceType: context.deviceInfo?.deviceType,
