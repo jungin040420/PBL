@@ -197,21 +197,22 @@ exports.loginFinish = async (req, res) => {
 
     // 기기 변경 여부 확인
     const [rows] = await db.query(
-    'SELECT last_device FROM users WHERE username = ?',
+    'SELECT last_device, last_ip, last_user_agent, last_country FROM users WHERE username = ?',
     [username]
     );
     
     context.deviceChanged = rows[0]?.last_device !== context.userAgent;
     context.ipChanged = rows[0]?.last_ip !== context.ip;
     context.userAgentChanged = rows[0]?.last_user_agent !== context.userAgent;
+    context.locationChanged = rows[0]?.last_country !== context.country;
 
     const deviceChanged = rows[0]?.last_device !== context.userAgent;
     context.deviceChanged = deviceChanged;
 
     // 현재 기기 정보 업데이트
     await db.query(
-    'UPDATE users SET last_device = ? WHERE username = ?',
-    [context.userAgent, username]
+    'UPDATE users SET last_device = ?, last_ip = ?, last_user_agent=?, last_country = ? WHERE username = ?',
+    [context.userAgent, context.ip, context.userAgent, context.country, username]
     );
 
     //로그인 빈도
