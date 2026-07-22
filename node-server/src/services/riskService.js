@@ -21,8 +21,9 @@ const sendRiskData = async (username, context) => {
 
   console.log('리스크 파트로 전달할 데이터:', payload);
 
+  try {
   const response = await axios.post(
-    process.env.RISK_API_URL || 'http://localhost:5000/risk',
+    process.env.RISK_API_URL || 'http://localhost:5000/analyze',
     payload
   );
 
@@ -31,6 +32,10 @@ const sendRiskData = async (username, context) => {
     level: response.data.risk_level,
     action: response.data.authentication_action,
   };
+}catch (error) {
+    console.error('422 상세 오류:', JSON.stringify(error.response?.data, null, 2)); // ← 추가
+    throw error;
+  }
 };
 
 module.exports = { sendRiskData };

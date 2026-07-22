@@ -223,12 +223,14 @@ exports.loginFinish = async (req, res) => {
     context.loginFrequency = loginFrequency;
 
     let riskScore = 0;
-    let riskLevel = 'Low'
+    let riskLevel = 'Low';
+    let riskAction = 'ACTIVE';
 
     try {
       const riskResult = await sendRiskData(username, context);
       riskScore = riskResult.score;
       riskLevel = riskResult.level;
+       riskAction = riskResult.action;
       console.log('리스크 스코어:', riskScore, riskLevel);
     } catch (error) {
       console.error('리스크 스코어 요청 실패:', error.message);
