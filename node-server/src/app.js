@@ -85,6 +85,9 @@ const authLimiter = rateLimit({
   message: { error: '너무 많은 요청입니다. 잠시 후 시도해주세요.' }
 });
 
+console.log('__dirname:', __dirname);
+console.log('client 경로:', path.join(__dirname, '../../client'));
+
 app.use(express.static(path.join(__dirname, '../../client')));
 
 app.get('/', (req, res) => {

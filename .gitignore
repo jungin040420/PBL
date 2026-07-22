@@ -10,10 +10,8 @@ api-server/__pycache__/
 *.pyc
 
 # 환경변수
-.env
-.env.dev
 .env.prod
-.env.*
+
 
 # 로그
 *.log
