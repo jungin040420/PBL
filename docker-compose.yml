@@ -5,7 +5,6 @@ services:
     image: nginx:latest
     container_name: nginx
     ports:
-<<<<<<< HEAD
       - "3000:3000"
     environment:
       - NODE_ENV=development
@@ -78,9 +77,8 @@ services:
     command: python main.py --reload
     networks:
       - dev-network
-=======
-      - "80:80"
->>>>>>> feature/loginpage
+   
+
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
