@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-
 app = FastAPI(
     title="Rule-Based Risk Score API",
     description="로그인 Feature를 이용해 Risk Score와 인증 정책을 계산합니다.",
@@ -22,9 +21,9 @@ def save_risk_log(data: "LogData", response: "RiskResponse"):
         "timestamp": datetime.now().isoformat(),
         "source": "python-risk-engine",
         "event_type": "risk_analysis",
-        "user_id": data.user_id,
+        "username": data.username,
         "ip": data.ip,
-        "device": data.device,
+        "deviceType": data.deviceType,
         "risk_score": response.risk_score,
         "risk_level": response.risk_level,
         "authentication_action": response.authentication_action,
@@ -36,12 +35,12 @@ def save_risk_log(data: "LogData", response: "RiskResponse"):
         f.write(json.dumps(log, ensure_ascii=False) + "\n")
 
     try:
-        response = requests.post(
+        res = requests.post(
             "http://localhost:9200/risk-logs/_doc",
             json=log,
             timeout=3
         )
-        response.raise_for_status()
+        res.raise_for_status()
         print("Python 로그 Elasticsearch 저장 성공")
 
     except requests.RequestException as e:
@@ -84,11 +83,10 @@ class LogData(BaseModel):
     )
 
 
-
 class RiskResponse(BaseModel):
-    user_id: str
+    username: str
     ip: str
-    device: str
+    deviceType: str
 
     risk_score: int
     risk_level: str
@@ -103,7 +101,7 @@ class RiskResponse(BaseModel):
 def read_root():
     return {
         "status": "Python 리스크 서버 실행 중",
-        "api": "POST /risk",
+        "api": "POST /analyze",
         "docs": "/docs",
     }
 
@@ -111,26 +109,20 @@ def read_root():
 def calculate_login_frequency_score(login_frequency: int) -> int:
     if login_frequency >= 10:
         return 15
-
     if login_frequency >= 5:
         return 10
-
     if login_frequency >= 3:
         return 5
-
     return 0
 
 
 def calculate_login_failure_score(login_failures: int) -> int:
     if login_failures >= 5:
         return 25
-
     if login_failures >= 3:
         return 15
-
     if login_failures >= 1:
         return 5
-
     return 0
 
 
@@ -139,66 +131,31 @@ def calculate_response_time_score(
 ) -> int:
     if challenge_response_time is None:
         return 0
-
-    # 지나치게 빠른 응답
     if 0 < challenge_response_time < 300:
         return 10
-
-    # 지나치게 느린 응답
     if challenge_response_time > 5000:
         return 5
-
     return 0
 
 
 def determine_authentication_policy(score: int) -> tuple[str, str, str]:
     if score <= 30:
-        return (
-            "low",
-            "ACTIVE",
-            "로그인이 허용되었습니다.",
-        )
-
+        return ("low", "ACTIVE", "로그인이 허용되었습니다.")
     if score <= 69:
-        return (
-            "medium",
-            "RE_AUTH",
-            "추가 인증이 필요합니다.",
-        )
-
-    return (
-        "high",
-        "BLOCKED",
-        "위험도가 높아 로그인이 차단되었습니다.",
-    )
+        return ("medium", "RE_AUTH", "추가 인증이 필요합니다.")
+    return ("high", "BLOCKED", "위험도가 높아 로그인이 차단되었습니다.")
 
 
-@app.post("/risk", response_model=RiskResponse)
+@app.post("/analyze", response_model=RiskResponse)  # ← /risk → /analyze
 def calculate_risk(data: LogData):
-    # 피싱 URL은 Risk Score Feature가 아니다.
-    # 탐지되는 즉시 점수 계산 없이 차단한다.
-    if data.is_phishing_url:
-        return RiskResponse(
-            user_id=data.user_id,
-            ip=data.ip,
-            device=data.device,
-            risk_score=100,
-            risk_level="critical",
-            authentication_action="BLOCKED",
-            message="위험 URL이 탐지되어 즉시 차단되었습니다.",
-            triggers=["PHISHING_URL_BLOCKED"],
-            feature_scores={},
-        )
-
     score = 0
     triggers: List[str] = []
     feature_scores: Dict[str, int] = {}
 
     # 1. 로그인 빈도
     login_frequency_score = calculate_login_frequency_score(
-        data.login_frequency
+        data.loginFrequency
     )
-
     if login_frequency_score > 0:
         score += login_frequency_score
         triggers.append("HIGH_LOGIN_FREQUENCY")
@@ -206,16 +163,15 @@ def calculate_risk(data: LogData):
 
     # 2. 로그인 실패 횟수
     login_failure_score = calculate_login_failure_score(
-        data.login_failures
+        data.failedLoginCount
     )
-
     if login_failure_score > 0:
         score += login_failure_score
         triggers.append("LOGIN_FAILURE")
         feature_scores["login_failures"] = login_failure_score
 
     # 3. IP 변경
-    if data.ip_changed:
+    if data.ipChanged:
         ip_score = 20
         score += ip_score
         triggers.append("IP_CHANGED")
@@ -253,7 +209,6 @@ def calculate_risk(data: LogData):
     response_time_score = calculate_response_time_score(
         data.challenge_response_time
     )
-
     if response_time_score > 0:
         score += response_time_score
         triggers.append("ABNORMAL_RESPONSE_TIME")
@@ -266,7 +221,7 @@ def calculate_risk(data: LogData):
         triggers.append("ODD_HOUR")
         feature_scores["login_hour"] = odd_hour_score
 
-    # 최종 점수는 0~100으로 제한
+    # 최종 점수 0~100으로 제한
     score = max(0, min(score, 100))
 
     risk_level, authentication_action, message = (
@@ -277,9 +232,9 @@ def calculate_risk(data: LogData):
         triggers.append("NO_RISK_DETECTED")
 
     response = RiskResponse(
-        user_id=data.user_id,
+        username=data.username,
         ip=data.ip,
-        device=data.device,
+        deviceType=data.deviceType,
         risk_score=score,
         risk_level=risk_level,
         authentication_action=authentication_action,
