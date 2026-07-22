@@ -1,39 +1,11 @@
-version: '3'
-
 services:
   nginx:
     image: nginx:latest
     container_name: nginx
     ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=development
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=authpass
-      - MYSQL_DATABASE=authdb
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - PYTHON_RISK_URL=http://python:8000
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./node-server:/app
-      - /app/node_modules
+      - "80:80"
     networks:
       - dev-network
-    restart: unless-stopped
-    deploy:
-      update_config:
-        order: start-first
-        failure_action: rollback
-      rollback_config:
-        parallelism: 0
-        order: stop-first
 
   python:
     build:
@@ -41,32 +13,20 @@ services:
       dockerfile: Dockerfile
     container_name: auth_python
     ports:
-      - "8000:8000"
+      - "5000:8000"
     environment:
-      - MYSQL_HOST=mysql
+      - MYSQL_HOST=auth_mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
       - MYSQL_PASSWORD=authpass
-      - MYSQL_DATABASE=authdb
-      - REDIS_HOST=redis
+      - MYSQL_DATABASE=mfa_db
+      - REDIS_HOST=auth_redis
       - REDIS_PORT=6379
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     volumes:
       - ./python-risk:/app
     networks:
       - dev-network
     restart: unless-stopped
-    deploy:
-      update_config:
-        order: start-first
-        failure_action: rollback
-      rollback_config:
-        parallelism: 0
-        order: stop-first
 
   ml-service:
     build:
@@ -77,8 +37,37 @@ services:
     command: python main.py --reload
     networks:
       - dev-network
-   
 
+  mysql:
+    image: mysql:8.0
+    container_name: auth_mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=9789
+      - MYSQL_DATABASE=mfa_db
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=authpass
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p9789"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dev-network
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: auth_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dev-network
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
@@ -88,12 +77,16 @@ services:
       - xpack.security.enabled=false
     ports:
       - "9200:9200"
+    networks:
+      - dev-network
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.5.0
     container_name: kibana
     ports:
       - "5601:5601"
+    networks:
+      - dev-network
 
   node-server:
     build: ./node-server
@@ -101,4 +94,15 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - elasticsearch
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_started
+    networks:
+      - dev-network
+
+networks:
+  dev-network:
+    driver: bridge
