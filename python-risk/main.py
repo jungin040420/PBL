@@ -49,16 +49,16 @@ def save_risk_log(data: "LogData", response: "RiskResponse"):
 
 
 class LogData(BaseModel):
-    user_id: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1)
     ip: str = Field(..., min_length=1)
-    device: str = Field(..., min_length=1)
+    deviceType: str = Field(..., min_length=1)
 
     country: str = "KR"
 
-    login_frequency: int = Field(default=0, ge=0)
-    login_failures: int = Field(default=0, ge=0)
+    loginFrequency: int = Field(default=0, ge=0)
+    failedLoginCount: int = Field(default=0, ge=0)
 
-    ip_changed: bool = False
+    ipChanged: bool = False
     user_agent_changed: bool = False
     is_new_device: bool = False
     location_changed: bool = False
@@ -83,7 +83,6 @@ class LogData(BaseModel):
         description="요일, 월요일=0 ~ 일요일=6",
     )
 
-    is_phishing_url: bool = False
 
 
 class RiskResponse(BaseModel):

@@ -280,7 +280,8 @@ exports.loginFinish = async (req, res) => {
         isNightAccess: context.isNightAccess
       },
       riskScore,
-      riskLevel
+      riskLevel,
+      riskAction: riskAction
     });
 
   } catch (error) {
