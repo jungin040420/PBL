@@ -9,8 +9,9 @@ api-server/__pycache__/
 **/__pycache__/
 *.pyc
 
-# 환경변수
-.env.prod
+# 환경변수 (F-08 §5: 키·Salt 코드 저장 금지)
+.env
+.env.*
 
 
 # 로그
