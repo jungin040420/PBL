@@ -79,6 +79,53 @@ const hashUserId = (userId) => {
 };
 
 // ─────────────────────────────────────────────
+// 규칙 1 예외 : 비교 목적 고정 Salt (재현 가능)
+// ─────────────────────────────────────────────
+
+/**
+ * 비교 전용 해시 (ipChanged / userAgentChanged / regionChanged 계산용)
+ * - F-08 v2.1 §5 예외 조항: 비교가 유일한 목적인 값에 고정 Salt를 허용
+ * - 랜덤 Salt는 동일 입력도 매번 다른 해시가 나와 직전 값과 비교가 불가능하다
+ * - 결과값은 Redis lastcontext:{userIdHash} 에만 저장하며 덮어쓰기로 관리한다
+ * - ML에 전달하는 값은 비교 결과(0/1)뿐이며 해시 자체는 전달하지 않는다 (F-08 §9)
+ * - anonymizeRandom() / hashUserId() 와 절대 혼용하지 않는다
+ *
+ * @param {string} value 비교 대상 원본 값 (IP, User-Agent 등)
+ * @returns {string|null} 64자리 hex 해시값
+ */
+const hashForCompare = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+
+  const salt = process.env.COMPARE_SALT;
+
+  if (!salt) {
+    throw new Error(
+      '[F-08] COMPARE_SALT 환경변수가 설정되지 않았습니다. ' +
+      '비교 목적 고정 Salt는 환경변수로만 관리합니다.'
+    );
+  }
+
+  if (salt.length < 64) {
+    throw new Error(
+      '[F-08] COMPARE_SALT가 32바이트(hex 64자) 미만입니다. ' +
+      'NIST SP 800-132 권고 기준 미달.'
+    );
+  }
+
+  if (salt === process.env.USERID_SALT) {
+    throw new Error(
+      '[F-08] COMPARE_SALT와 USERID_SALT가 동일합니다. ' +
+      '규칙 5 혼용 금지 조항 위반.'
+    );
+  }
+
+  return crypto
+    .createHash('sha256')
+    .update(String(value) + salt)
+    .digest('hex');
+};
+
+// ─────────────────────────────────────────────
 // 규칙 4 : User-Agent 전용 처리
 // ─────────────────────────────────────────────
 
@@ -124,6 +171,7 @@ const generateFixedSalt = () => crypto.randomBytes(32).toString('hex');
 module.exports = {
   anonymizeRandom,
   hashUserId,
+  hashForCompare,
   anonymizeUserAgent,
   generateFixedSalt,
 };
