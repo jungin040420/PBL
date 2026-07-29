@@ -51,5 +51,33 @@ jobs:
           sudo apt-get install -y docker-compose
       - name: Docker 빌드 테스트
         run: docker-compose build
+  ml-train:
+    name: ML 모델 자동 재학습
+    runs-on: ubuntu-latest
+    needs: [node-lint, python-lint, docker-build]
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
 
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: |
+          pip install -r python-risk/requirements.txt
+          pip install scikit-learn joblib pandas numpy
+
+      - name: ML 모델 학습
+        run: |
+          cd python-risk
+          python train_model.py --allow-synthetic
+
+      - name: 모델 파일 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolation-forest-model
+          path: python-risk/model/
   
