@@ -49,6 +49,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y docker-compose
+      - name: CI 전용 빈 env 파일 생성 (F-08 §5 - 실제 키 값은 절대 커밋하지 않음)
+        run: touch .env.dev
       - name: Docker 빌드 테스트
         run: docker-compose build
   ml-train:
