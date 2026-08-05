@@ -1,12 +1,18 @@
 CREATE DATABASE IF NOT EXISTS mfa_db;
 USE mfa_db;
 
+GRANT ALL PRIVILEGES ON mfa_db.* TO 'authuser'@'%';
+FLUSH PRIVILEGES;
+
 CREATE TABLE IF NOT EXISTS users (
   id            INT AUTO_INCREMENT PRIMARY KEY,
   username      VARCHAR(50)  NOT NULL UNIQUE,
   display_name  VARCHAR(100) NOT NULL,
   email         VARCHAR(100) NOT NULL UNIQUE,
-  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP
+  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  last_device   VARCHAR(255),
+  last_ip       VARCHAR(45),
+  last_user_agent VARCHAR(255)
 );
 
 CREATE TABLE IF NOT EXISTS passkeys (
@@ -16,6 +22,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
   public_key     TEXT         NOT NULL,
   counter        INT          DEFAULT 0,
   created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  is_active      TINYINT(1)   DEFAULT 1,
 
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -36,9 +43,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS last_device TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip TEXT;
-
 -- 연결 확인용 테스트 데이터 (나중에 삭제)
 INSERT INTO users (username, display_name, email)
 VALUES ('testuser', '테스트 유저', 'test@test.com');
@@ -55,6 +59,7 @@ CREATE TABLE IF NOT EXISTS access_logs (
     user_agent  TEXT,
     location    VARCHAR(100),
     auth_result ENUM('success','fail') NOT NULL,
+    reason      VARCHAR(255),
     created_at  DATETIME      NOT NULL DEFAULT NOW()
 );
 
