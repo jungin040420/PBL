@@ -1,14 +1,15 @@
 -- =====================================================================
--- ml_purge_event.sql
--- ML 테이블 자동 파기 Event 등록
+-- 04_purge_event.sql
+-- MySQL Event Scheduler 자동 파기 Event 등록
 --
 -- 근거 문서 : F-09 v2.0 §3 「Event Scheduler 실행 주기 및 파기 쿼리 정의」
+--             audit_logs      : 매일 새벽 2시 / created_at   < NOW() - INTERVAL 1 YEAR
 --             ml_feature_logs : 매일 새벽 2시 / created_at   < NOW() - INTERVAL 90 DAY
 --             ml_predictions  : 매일 새벽 2시 / predicted_at < NOW() - INTERVAL 1 YEAR
 -- 담당자     : 윤정인
--- 작성일     : 2026.07.29
+-- 작성일     : 2026.07.29 (2026.08.05 audit_logs 추가)
 --
--- [실행 순서] ml_schema.sql 실행 후 적용할 것
+-- [실행 순서] 01_init.sql, 02_ml_schema.sql 실행 후 적용할 것
 --
 -- [실행 주체] 본 Event 는 관리자 계정으로 생성하며, 생성한 계정이
 --             DEFINER 가 됩니다. ml_writer / ml_reader 에는 DELETE 권한을
@@ -80,10 +81,42 @@ CREATE EVENT ev_purge_ml_predictions
 
 
 -- ---------------------------------------------------------------------
--- 3. 검증 (F-09 v2.0 §「운영 점검」)
+-- 3. audit_logs — 1년 보존
+--
+--    감사 로그의 법정 보관 의무 기간 경과분 파기.
+--    근거 : 개인정보보호법 시행령 제48조의2 (감사기록 최소 1년 보관)
+--           보관 의무 경과분은 같은 법 제21조에 따라 파기
+--    (F-09 v2.0 §3 및 법적 근거표)
+--
+--    본 파일은 USE ml_db 상태이므로 Event 이름을 스키마로 한정합니다.
+--    한정하지 않으면 ml_db 소속 Event 로 생성됩니다.
+--
+--    [선행 조건] 01_init.sql 에 audit_logs 테이블이 생성되어 있어야 합니다.
+--                (테이블 정의는 ① 인증 담당 소관)
+-- ---------------------------------------------------------------------
+DROP EVENT IF EXISTS mfa_db.ev_purge_audit_logs;
+
+CREATE EVENT mfa_db.ev_purge_audit_logs
+  ON SCHEDULE
+    EVERY 1 DAY
+    STARTS (TIMESTAMP(CURRENT_DATE) + INTERVAL 1 DAY + INTERVAL 2 HOUR)
+  COMMENT 'F-09 v2.0: audit_logs 1년 보존 후 파기. 매일 02:00'
+  DO
+    DELETE FROM mfa_db.audit_logs
+     WHERE created_at < NOW() - INTERVAL 1 YEAR;
+
+
+-- ---------------------------------------------------------------------
+-- 4. 검증 (F-09 v2.0 §「운영 점검」)
 --
 --   SHOW EVENTS FROM ml_db;
---     --> 두 Event 가 ENABLED 상태여야 정상. 운영 배포 후 1회 + 월 1회 확인
+--     --> ev_purge_ml_feature_logs, ev_purge_ml_predictions 가
+--         ENABLED 상태여야 정상
+--
+--   SHOW EVENTS FROM mfa_db;
+--     --> ev_purge_audit_logs 가 ENABLED 상태여야 정상
+--
+--     운영 배포 후 1회 + 월 1회 확인
 --
 --   SHOW VARIABLES LIKE 'event_scheduler';
 --     --> ON
@@ -91,7 +124,7 @@ CREATE EVENT ev_purge_ml_predictions
 
 
 -- ---------------------------------------------------------------------
--- 4. [미구현] 삭제 건수 감사 로그 기록
+-- 5. [미구현] 삭제 건수 감사 로그 기록
 --
 --    F-09 v2.0 은 "Event Scheduler 실행 완료 후 삭제 건수를 F-06 감사 로그에
 --    기록" 하도록 정의하고 있습니다. 본 파일은 삭제만 수행하며 감사 로그
