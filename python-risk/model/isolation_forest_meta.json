@@ -1,0 +1,16 @@
+{
+  "model_type": "SYNTHETIC",
+  "training_rows": 200,
+  "contamination": 0.05,
+  "feature_order": [
+    "loginFrequency",
+    "failedLoginCount",
+    "ipChanged",
+    "userAgentChanged",
+    "isNewDevice",
+    "regionChanged",
+    "challengeResponseTime",
+    "loginHour",
+    "dayOfWeek"
+  ]
+}

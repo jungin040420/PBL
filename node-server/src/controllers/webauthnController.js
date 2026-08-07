@@ -100,9 +100,7 @@ exports.loginStart = async (req, res) => {
       });
     }
 
-    /*
-     * Challenge 응답시간 측정을 위한 시작시간 저장
-     */
+    // Challenge 응답시간 측정을 위한 시작시간 저장
     await redisClient.set(
         `challenge:time:${username}`,
         Date.now(),
@@ -129,7 +127,8 @@ exports.loginStart = async (req, res) => {
 
 
 // ============================================================
-// 로그인 2단계: 서명 검증 + Risk 분석 + 세션 발급
+// 로그인 2단계
+// WebAuthn 검증 + Risk 분석 + ML 결과 + 세션 발급
 // ============================================================
 
 exports.loginFinish = async (req, res) => {
@@ -153,9 +152,10 @@ exports.loginFinish = async (req, res) => {
     // 1. Challenge 응답시간 계산
     // --------------------------------------------------------
 
-    const startTime = await redisClient.get(
-        `challenge:time:${username}`
-    );
+    const startTime =
+        await redisClient.get(
+            `challenge:time:${username}`
+        );
 
     const challengeResponseTime =
         startTime
@@ -231,9 +231,6 @@ exports.loginFinish = async (req, res) => {
 
     // --------------------------------------------------------
     // 5. 사용자 DB PK 조회
-    //
-    // F-08:
-    // 직전 IP / UA 등의 개인정보는 users 테이블에 저장하지 않는다.
     // --------------------------------------------------------
 
     const [rows] = await db.query(
@@ -275,11 +272,8 @@ exports.loginFinish = async (req, res) => {
         );
 
     /*
-     * 현재 별도의 device fingerprint가 없기 때문에
+     * 현재 별도의 device fingerprint가 없으므로
      * deviceType을 비교용 값으로 사용한다.
-     *
-     * 추후 실제 device fingerprint가 추가되면
-     * 해당 값을 hashForCompare() 처리해서 교체 가능.
      */
     const currentDeviceHash =
         hashForCompare(
@@ -311,6 +305,7 @@ exports.loginFinish = async (req, res) => {
             JSON.parse(
                 previousContextRaw
             );
+
       } catch (error) {
         console.error(
             "직전 로그인 컨텍스트 JSON 파싱 실패:",
@@ -344,11 +339,7 @@ exports.loginFinish = async (req, res) => {
 
     } else {
 
-      /*
-       * 이전 Context가 없으면 최초 로그인으로 판단.
-       *
-       * 비교 기준이 없기 때문에 변경 Feature는 false.
-       */
+      // 이전 Context가 없으면 비교 기준이 없으므로 false
       context.ipChanged = false;
       context.userAgentChanged = false;
       context.deviceChanged = false;
@@ -378,9 +369,7 @@ exports.loginFinish = async (req, res) => {
 
 
     // --------------------------------------------------------
-    // 9. 현재 Context를 Redis에 저장
-    //
-    // 원본 IP / User-Agent는 저장하지 않는다.
+    // 9. 현재 Context Redis 저장
     // --------------------------------------------------------
 
     const currentContext = {
@@ -444,10 +433,20 @@ exports.loginFinish = async (req, res) => {
     let riskFeatureScores = {};
 
 
+    // --------------------------------------------------------
+    // Isolation Forest ML 결과
+    // --------------------------------------------------------
+
+    let mlModelUsed = false;
+    let mlModelType = null;
+    let mlAnomalyScore = null;
+    let mlIsAnomaly = null;
+
+
     try {
 
       /*
-       * username이 아닌 users.id를 전달한다.
+       * username 대신 users.id를 전달한다.
        *
        * riskService.js에서:
        *
@@ -457,7 +456,7 @@ exports.loginFinish = async (req, res) => {
        * hashForCompare(context.ip)
        * → ipHash
        *
-       * 로 변환해서 Python에 전달한다.
+       * 로 변환 후 Python Risk API에 전달한다.
        */
       const riskResult =
           await sendRiskData(
@@ -465,6 +464,8 @@ exports.loginFinish = async (req, res) => {
               context
           );
 
+
+      // Rule 기반 결과
       riskScore =
           riskResult.score ?? 0;
 
@@ -485,12 +486,31 @@ exports.loginFinish = async (req, res) => {
           riskResult.featureScores ?? {};
 
 
+      // Isolation Forest 결과
+      mlModelUsed =
+          riskResult.mlModelUsed ?? false;
+
+      mlModelType =
+          riskResult.mlModelType ?? null;
+
+      mlAnomalyScore =
+          riskResult.mlAnomalyScore ?? null;
+
+      mlIsAnomaly =
+          riskResult.mlIsAnomaly ?? null;
+
+
       console.log(
           "리스크 분석 완료:",
           {
             riskScore,
             riskLevel,
             riskAction,
+
+            mlModelUsed,
+            mlModelType,
+            mlAnomalyScore,
+            mlIsAnomaly,
           }
       );
 
@@ -502,8 +522,8 @@ exports.loginFinish = async (req, res) => {
       );
 
       /*
-       * 현재 개발 단계에서는
-       * Risk API 장애 시 로그인 흐름을 유지한다.
+       * 현재 개발 단계:
+       * Risk API 장애 시 로그인 흐름 유지.
        *
        * 추후 fail-open / fail-closed 정책 확정 필요.
        */
@@ -511,7 +531,7 @@ exports.loginFinish = async (req, res) => {
 
 
     // --------------------------------------------------------
-    // 12. Risk Action 처리
+    // 12. Risk Action: BLOCKED
     // --------------------------------------------------------
 
     if (riskAction === "BLOCKED") {
@@ -529,9 +549,30 @@ exports.loginFinish = async (req, res) => {
 
         triggers:
         riskTriggers,
+
+        featureScores:
+        riskFeatureScores,
+
+        ml: {
+          modelUsed:
+          mlModelUsed,
+
+          modelType:
+          mlModelType,
+
+          anomalyScore:
+          mlAnomalyScore,
+
+          isAnomaly:
+          mlIsAnomaly,
+        },
       });
     }
 
+
+    // --------------------------------------------------------
+    // 13. Risk Action: RE_AUTH
+    // --------------------------------------------------------
 
     if (riskAction === "RE_AUTH") {
 
@@ -554,12 +595,26 @@ exports.loginFinish = async (req, res) => {
 
         featureScores:
         riskFeatureScores,
+
+        ml: {
+          modelUsed:
+          mlModelUsed,
+
+          modelType:
+          mlModelType,
+
+          anomalyScore:
+          mlAnomalyScore,
+
+          isAnomaly:
+          mlIsAnomaly,
+        },
       });
     }
 
 
     // --------------------------------------------------------
-    // 13. LOW Risk → 세션 생성
+    // 14. LOW Risk → 세션 생성
     // --------------------------------------------------------
 
     const session =
@@ -584,7 +639,7 @@ exports.loginFinish = async (req, res) => {
 
 
     // --------------------------------------------------------
-    // 14. 세션 Cookie 저장
+    // 15. 세션 Cookie 저장
     // --------------------------------------------------------
 
     const isNgrok =
@@ -613,12 +668,14 @@ exports.loginFinish = async (req, res) => {
 
 
     // --------------------------------------------------------
-    // 15. 로그인 성공 응답
+    // 16. 로그인 성공 응답
     // --------------------------------------------------------
 
     return res.status(200).json({
       success: true,
-      message: "로그인 성공",
+
+      message:
+          "로그인 성공",
 
       context: {
 
@@ -647,6 +704,25 @@ exports.loginFinish = async (req, res) => {
 
       featureScores:
       riskFeatureScores,
+
+
+      // ------------------------------------------------------
+      // Isolation Forest 결과
+      // ------------------------------------------------------
+
+      ml: {
+        modelUsed:
+        mlModelUsed,
+
+        modelType:
+        mlModelType,
+
+        anomalyScore:
+        mlAnomalyScore,
+
+        isAnomaly:
+        mlIsAnomaly,
+      },
     });
 
   } catch (error) {
@@ -736,6 +812,7 @@ exports.verifySession = async (
 
     return res.status(200).json({
       success: true,
+
       username:
       result.username,
     });

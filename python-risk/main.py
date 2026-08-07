@@ -1,19 +1,33 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import pymysql
 import requests
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-
-app = FastAPI(
-    title="Rule-Based Risk Score API",
-    description="로그인 Feature를 이용해 Risk Score와 인증 정책을 계산합니다.",
-    version="1.2.0",
+from app.isolation_model import (
+    load_metadata,
+    predict_anomaly_score,
 )
 
+
+app = FastAPI(
+    title="Hybrid Risk Score API",
+    description=(
+        "Rule 기반 Risk Score와 Isolation Forest 이상 탐지를 이용해 "
+        "로그인 위험도를 분석하고 ML 학습 Feature를 저장합니다."
+    ),
+    version="1.4.0",
+)
+
+
+# ============================================================
+# 기본 설정
+# ============================================================
 
 LOG_FILE = Path("risk_logs.jsonl")
 
@@ -23,60 +37,74 @@ ELASTICSEARCH_URL = (
 
 
 # ============================================================
+# MySQL 설정
+# ============================================================
+
+DB_HOST = os.getenv(
+    "DB_HOST",
+    "localhost",
+)
+
+DB_PORT = int(
+    os.getenv(
+        "DB_PORT",
+        "3307",
+    )
+)
+
+DB_USER = os.getenv(
+    "DB_USER",
+    "authuser",
+)
+
+DB_PASSWORD = os.getenv(
+    "DB_PASSWORD",
+)
+
+DB_NAME = os.getenv(
+    "DB_NAME",
+    "mfa_db",
+)
+
+
+# ============================================================
 # Request Model
 # ============================================================
 
 class LogData(BaseModel):
 
-    # F-08
-    # Node에서 USERID_SALT 기반으로 생성
-    # Python에서는 해싱하지 않고 전달받은 값 그대로 사용
     userIdHash: str = Field(
         ...,
         min_length=64,
         max_length=64,
-        description=(
-            "USERID_SALT 기반 SHA-256 사용자 식별자 해시"
-        ),
+        description="USERID_SALT 기반 SHA-256 사용자 식별자 해시",
     )
 
-    # F-08
-    # Node에서 COMPARE_SALT 기반으로 생성
-    # 동일 IP는 동일한 해시값을 생성
-    # 원본 IP는 Python으로 전달하지 않는다.
     ipHash: str = Field(
         ...,
         min_length=64,
         max_length=64,
-        description=(
-            "COMPARE_SALT 기반 SHA-256 IP 비교용 해시"
-        ),
+        description="COMPARE_SALT 기반 SHA-256 IP 비교용 해시",
     )
 
     deviceType: str = Field(
         ...,
         min_length=1,
-        description=(
-            "desktop, mobile, tablet 등의 기기 분류값"
-        ),
     )
 
     country: str = Field(
         default="KR",
         min_length=2,
-        description="접속 국가 코드",
     )
 
     loginFrequency: int = Field(
         default=0,
         ge=0,
-        description="로그인 빈도",
     )
 
     failedLoginCount: int = Field(
         default=0,
         ge=0,
-        description="로그인 실패 횟수",
     )
 
     ipChanged: bool = False
@@ -90,27 +118,18 @@ class LogData(BaseModel):
     challengeResponseTime: Optional[float] = Field(
         default=None,
         ge=0,
-        description=(
-            "FIDO2 Challenge 응답시간(ms)"
-        ),
     )
 
     loginHour: int = Field(
         default=12,
         ge=0,
         le=23,
-        description=(
-            "로그인 시간, 0~23"
-        ),
     )
 
     dayOfWeek: int = Field(
         default=0,
         ge=0,
         le=6,
-        description=(
-            "요일, 일요일=0 ~ 토요일=6"
-        ),
     )
 
 
@@ -121,42 +140,283 @@ class LogData(BaseModel):
 class RiskResponse(BaseModel):
 
     userIdHash: str
-
     ipHash: str
-
     deviceType: str
 
     risk_score: int
-
     risk_level: str
-
     authentication_action: str
-
     message: str
 
     triggers: List[str]
-
     feature_scores: Dict[str, int]
+
+    # ML 관련 결과
+    ml_model_used: bool = False
+
+    ml_model_type: Optional[str] = None
+
+    ml_anomaly_score: Optional[float] = None
+
+    ml_is_anomaly: Optional[bool] = None
 
 
 # ============================================================
-# Risk Log 저장
+# ML Feature 로그 MySQL 저장
+# ============================================================
+
+def save_ml_feature_log(
+    data: LogData,
+) -> None:
+
+    if not DB_PASSWORD:
+        print(
+            "ML Feature MySQL 저장 건너뜀: "
+            "DB_PASSWORD 환경변수가 없습니다."
+        )
+        return
+
+    connection = None
+
+    try:
+
+        connection = pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            charset="utf8mb4",
+            connect_timeout=3,
+            autocommit=True,
+        )
+
+        sql = """
+            INSERT INTO ml_feature_logs (
+                user_id_hash,
+                ip_hash,
+                login_frequency,
+                failed_login_count,
+                ip_changed,
+                user_agent_changed,
+                is_new_device,
+                region_changed,
+                challenge_response_time,
+                login_hour,
+                day_of_week,
+                data_source
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                'REAL'
+            )
+        """
+
+        values = (
+            data.userIdHash,
+            data.ipHash,
+            data.loginFrequency,
+            data.failedLoginCount,
+            int(data.ipChanged),
+            int(data.userAgentChanged),
+            int(data.isNewDevice),
+            int(data.regionChanged),
+            data.challengeResponseTime,
+            data.loginHour,
+            data.dayOfWeek,
+        )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                sql,
+                values,
+            )
+
+        print(
+            "ML Feature MySQL 저장 성공 [REAL]"
+        )
+
+    except pymysql.MySQLError as error:
+
+        print(
+            "ML Feature MySQL 저장 실패:",
+            error,
+        )
+
+    finally:
+
+        if connection is not None:
+            connection.close()
+
+
+# ============================================================
+# ML 추론
+# ============================================================
+
+def run_ml_analysis(
+    data: LogData,
+) -> dict:
+
+    metadata = load_metadata()
+
+    # --------------------------------------------------------
+    # 모델 metadata 자체가 없는 경우
+    # --------------------------------------------------------
+
+    if not metadata:
+
+        print(
+            "ML 추론 건너뜀: 모델 metadata 없음"
+        )
+
+        return {
+            "ml_model_used": False,
+            "ml_model_type": None,
+            "ml_anomaly_score": None,
+            "ml_is_anomaly": None,
+        }
+
+
+    model_type = metadata.get(
+        "model_type"
+    )
+
+
+    # --------------------------------------------------------
+    # SYNTHETIC 모델은 실제 로그인 판정 금지
+    # --------------------------------------------------------
+
+    if model_type != "REAL":
+
+        print(
+            f"ML 추론 건너뜀: "
+            f"{model_type} 모델은 실제 판정에 사용하지 않음"
+        )
+
+        return {
+            "ml_model_used": False,
+            "ml_model_type": model_type,
+            "ml_anomaly_score": None,
+            "ml_is_anomaly": None,
+        }
+
+
+    # --------------------------------------------------------
+    # 모델 입력 Feature
+    # --------------------------------------------------------
+
+    features = {
+        "loginFrequency":
+            data.loginFrequency,
+
+        "failedLoginCount":
+            data.failedLoginCount,
+
+        "ipChanged":
+            data.ipChanged,
+
+        "userAgentChanged":
+            data.userAgentChanged,
+
+        "isNewDevice":
+            data.isNewDevice,
+
+        "regionChanged":
+            data.regionChanged,
+
+        "challengeResponseTime":
+            (
+                data.challengeResponseTime
+                if data.challengeResponseTime is not None
+                else 0
+            ),
+
+        "loginHour":
+            data.loginHour,
+
+        "dayOfWeek":
+            data.dayOfWeek,
+    }
+
+
+    try:
+
+        result = predict_anomaly_score(
+            features
+        )
+
+    except Exception as error:
+
+        print(
+            "ML 추론 실패:",
+            error,
+        )
+
+        return {
+            "ml_model_used": False,
+            "ml_model_type": model_type,
+            "ml_anomaly_score": None,
+            "ml_is_anomaly": None,
+        }
+
+
+    if result is None:
+
+        print(
+            "ML 추론 결과 없음 -> Rule 기반 fallback"
+        )
+
+        return {
+            "ml_model_used": False,
+            "ml_model_type": model_type,
+            "ml_anomaly_score": None,
+            "ml_is_anomaly": None,
+        }
+
+
+    print(
+        "ML 추론 성공:",
+        {
+            "model_type":
+                model_type,
+
+            "anomaly_score":
+                result["anomaly_score"],
+
+            "is_anomaly":
+                result["is_anomaly"],
+        }
+    )
+
+
+    return {
+        "ml_model_used": True,
+        "ml_model_type": model_type,
+        "ml_anomaly_score":
+            result["anomaly_score"],
+        "ml_is_anomaly":
+            result["is_anomaly"],
+    }
+
+
+# ============================================================
+# Risk 로그 저장
 # ============================================================
 
 def save_risk_log(
     data: LogData,
     risk_response: RiskResponse,
 ) -> None:
-    """
-    F-08 개인정보 처리 기준
-
-    - 원본 username 저장하지 않음
-    - 원본 IP 저장하지 않음
-    - 원본 User-Agent 저장하지 않음
-
-    Node에서 생성한 userIdHash / ipHash와
-    파생 Feature만 저장한다.
-    """
 
     log = {
 
@@ -171,11 +431,9 @@ def save_risk_log(
         "event_type":
             "risk_analysis",
 
-        # 비식별 사용자 식별자
         "userIdHash":
             data.userIdHash,
 
-        # 비식별 IP 해시
         "ipHash":
             data.ipHash,
 
@@ -226,11 +484,24 @@ def save_risk_log(
 
         "feature_scores":
             risk_response.feature_scores,
+
+        # ML 결과
+        "ml_model_used":
+            risk_response.ml_model_used,
+
+        "ml_model_type":
+            risk_response.ml_model_type,
+
+        "ml_anomaly_score":
+            risk_response.ml_anomaly_score,
+
+        "ml_is_anomaly":
+            risk_response.ml_is_anomaly,
     }
 
 
     # --------------------------------------------------------
-    # 로컬 JSONL 로그
+    # JSONL
     # --------------------------------------------------------
 
     try:
@@ -257,7 +528,7 @@ def save_risk_log(
 
 
     # --------------------------------------------------------
-    # Elasticsearch 저장
+    # Elasticsearch
     # --------------------------------------------------------
 
     try:
@@ -276,8 +547,6 @@ def save_risk_log(
 
     except requests.RequestException as error:
 
-        # Elasticsearch 장애가
-        # Risk API 자체를 중단시키지 않도록 한다.
         print(
             "Python 로그 Elasticsearch 저장 실패:",
             error,
@@ -291,6 +560,8 @@ def save_risk_log(
 @app.get("/")
 def read_root():
 
+    metadata = load_metadata()
+
     return {
         "status":
             "Python 리스크 서버 실행 중",
@@ -300,11 +571,21 @@ def read_root():
 
         "docs":
             "/docs",
+
+        "ml_feature_log":
+            "MySQL ml_feature_logs",
+
+        "ml_model_type":
+            (
+                metadata.get("model_type")
+                if metadata
+                else None
+            ),
     }
 
 
 # ============================================================
-# 로그인 빈도 점수
+# Rule Score 함수
 # ============================================================
 
 def calculate_login_frequency_score(
@@ -323,10 +604,6 @@ def calculate_login_frequency_score(
     return 0
 
 
-# ============================================================
-# 로그인 실패 점수
-# ============================================================
-
 def calculate_login_failure_score(
     login_failures: int,
 ) -> int:
@@ -343,10 +620,6 @@ def calculate_login_failure_score(
     return 0
 
 
-# ============================================================
-# Challenge 응답시간 점수
-# ============================================================
-
 def calculate_response_time_score(
     challenge_response_time: Optional[float],
 ) -> int:
@@ -354,26 +627,19 @@ def calculate_response_time_score(
     if challenge_response_time is None:
         return 0
 
-    # 비정상적으로 빠른 응답
     if 0 < challenge_response_time < 300:
         return 10
 
-    # 비정상적으로 느린 응답
     if challenge_response_time > 5000:
         return 5
 
     return 0
 
 
-# ============================================================
-# 최종 인증 정책 결정
-# ============================================================
-
 def determine_authentication_policy(
     score: int,
 ) -> tuple[str, str, str]:
 
-    # LOW
     if score <= 30:
 
         return (
@@ -382,7 +648,6 @@ def determine_authentication_policy(
             "로그인이 허용되었습니다.",
         )
 
-    # MEDIUM
     if score <= 69:
 
         return (
@@ -391,7 +656,6 @@ def determine_authentication_policy(
             "추가 인증이 필요합니다.",
         )
 
-    # HIGH
     return (
         "high",
         "BLOCKED",
@@ -602,7 +866,7 @@ def calculate_risk(
 
 
     # --------------------------------------------------------
-    # 최종 점수 0 ~ 100 제한
+    # Rule 점수 제한
     # --------------------------------------------------------
 
     score = max(
@@ -614,8 +878,45 @@ def calculate_risk(
     )
 
 
+    # ========================================================
+    # Isolation Forest ML 추론
+    # ========================================================
+
+    ml_result = run_ml_analysis(
+        data
+    )
+
+
     # --------------------------------------------------------
-    # 인증 정책 결정
+    # REAL 모델 + 이상치인 경우에만 ML 보정점수 적용
+    # --------------------------------------------------------
+
+    if (
+        ml_result["ml_model_used"]
+        and
+        ml_result["ml_is_anomaly"] is True
+    ):
+
+        ml_risk_score = 20
+
+        score += ml_risk_score
+
+        score = min(
+            score,
+            100,
+        )
+
+        triggers.append(
+            "ML_ANOMALY_DETECTED"
+        )
+
+        feature_scores[
+            "mlAnomaly"
+        ] = ml_risk_score
+
+
+    # --------------------------------------------------------
+    # 인증 정책
     # --------------------------------------------------------
 
     (
@@ -635,7 +936,7 @@ def calculate_risk(
 
 
     # --------------------------------------------------------
-    # Response 생성
+    # Response
     # --------------------------------------------------------
 
     risk_response = RiskResponse(
@@ -666,11 +967,40 @@ def calculate_risk(
 
         feature_scores=
             feature_scores,
+
+        ml_model_used=
+            ml_result[
+                "ml_model_used"
+            ],
+
+        ml_model_type=
+            ml_result[
+                "ml_model_type"
+            ],
+
+        ml_anomaly_score=
+            ml_result[
+                "ml_anomaly_score"
+            ],
+
+        ml_is_anomaly=
+            ml_result[
+                "ml_is_anomaly"
+            ],
     )
 
 
     # --------------------------------------------------------
-    # 로그 저장
+    # REAL 학습 Feature 저장
+    # --------------------------------------------------------
+
+    save_ml_feature_log(
+        data
+    )
+
+
+    # --------------------------------------------------------
+    # Risk 로그 저장
     # --------------------------------------------------------
 
     save_risk_log(

@@ -1,8 +1,8 @@
 const axios = require("axios");
 
 const {
-  hashUserId,
-  hashForCompare,
+    hashUserId,
+    hashForCompare,
 } = require("../utils/anonymize");
 
 
@@ -10,161 +10,177 @@ const sendRiskData = async (
     userId,
     context
 ) => {
-  const now = new Date();
+    const now = new Date();
 
-  const userIdHash =
-      hashUserId(userId);
+    const userIdHash =
+        hashUserId(userId);
 
-  const ipHash =
-      hashForCompare(
-          context.ip
-      );
-
-  const payload = {
-    userIdHash,
-    ipHash,
-
-    deviceType:
-        context.deviceInfo?.deviceType ??
-        "unknown",
-
-    country:
-        context.country ??
-        "KR",
-
-    loginFrequency:
-        context.loginFrequency ??
-        0,
-
-    failedLoginCount:
-        context.failedLoginCount ??
-        0,
-
-    ipChanged:
-        context.ipChanged ??
-        false,
-
-    userAgentChanged:
-        context.userAgentChanged ??
-        false,
-
-    isNewDevice:
-        context.deviceChanged ??
-        false,
-
-    regionChanged:
-        context.locationChanged ??
-        false,
-
-    challengeResponseTime:
-        context.challengeResponseTime ??
-        null,
-
-    loginHour:
-        now.getHours(),
-
-    dayOfWeek:
-        now.getDay(),
-  };
-
-  console.log(
-      "리스크 전달 필드:",
-      {
-        hasUserIdHash:
-            Boolean(payload.userIdHash),
-
-        hasIpHash:
-            Boolean(payload.ipHash),
-
-        deviceType:
-        payload.deviceType,
-
-        country:
-        payload.country,
-
-        loginFrequency:
-        payload.loginFrequency,
-
-        failedLoginCount:
-        payload.failedLoginCount,
-
-        ipChanged:
-        payload.ipChanged,
-
-        userAgentChanged:
-        payload.userAgentChanged,
-
-        isNewDevice:
-        payload.isNewDevice,
-
-        regionChanged:
-        payload.regionChanged,
-
-        challengeResponseTime:
-        payload.challengeResponseTime,
-
-        loginHour:
-        payload.loginHour,
-
-        dayOfWeek:
-        payload.dayOfWeek,
-      }
-  );
-
-  try {
-    const response =
-        await axios.post(
-            process.env.RISK_API_URL ||
-            "http://localhost:5000/analyze",
-
-            payload,
-
-            {
-              timeout: 3000,
-
-              headers: {
-                "Content-Type":
-                    "application/json",
-              },
-            }
+    const ipHash =
+        hashForCompare(
+            context.ip
         );
 
-    return {
-      score:
-      response.data.risk_score,
+    const payload = {
+        userIdHash,
+        ipHash,
 
-      level:
-      response.data.risk_level,
+        deviceType:
+            context.deviceInfo?.deviceType ??
+            "unknown",
 
-      action:
-      response.data.authentication_action,
+        country:
+            context.country ??
+            "KR",
 
-      message:
-      response.data.message,
+        loginFrequency:
+            context.loginFrequency ??
+            0,
 
-      triggers:
-      response.data.triggers,
+        failedLoginCount:
+            context.failedLoginCount ??
+            0,
 
-      featureScores:
-      response.data.feature_scores,
+        ipChanged:
+            context.ipChanged ??
+            false,
+
+        userAgentChanged:
+            context.userAgentChanged ??
+            false,
+
+        isNewDevice:
+            context.deviceChanged ??
+            false,
+
+        regionChanged:
+            context.locationChanged ??
+            false,
+
+        challengeResponseTime:
+            context.challengeResponseTime ??
+            null,
+
+        loginHour:
+            now.getHours(),
+
+        dayOfWeek:
+            now.getDay(),
     };
 
-  } catch (error) {
-    console.error(
-        "리스크 API 오류:",
-        JSON.stringify(
-            error.response?.data ??
-            error.message,
-            null,
-            2
-        )
+    console.log(
+        "리스크 전달 필드:",
+        {
+            hasUserIdHash:
+                Boolean(payload.userIdHash),
+
+            hasIpHash:
+                Boolean(payload.ipHash),
+
+            deviceType:
+            payload.deviceType,
+
+            country:
+            payload.country,
+
+            loginFrequency:
+            payload.loginFrequency,
+
+            failedLoginCount:
+            payload.failedLoginCount,
+
+            ipChanged:
+            payload.ipChanged,
+
+            userAgentChanged:
+            payload.userAgentChanged,
+
+            isNewDevice:
+            payload.isNewDevice,
+
+            regionChanged:
+            payload.regionChanged,
+
+            challengeResponseTime:
+            payload.challengeResponseTime,
+
+            loginHour:
+            payload.loginHour,
+
+            dayOfWeek:
+            payload.dayOfWeek,
+        }
     );
 
-    throw error;
-  }
+    try {
+        const response =
+            await axios.post(
+                process.env.RISK_API_URL ||
+                "http://localhost:5000/analyze",
+
+                payload,
+
+                {
+                    timeout: 3000,
+
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                    },
+                }
+            );
+
+        return {
+            score:
+            response.data.risk_score,
+
+            level:
+            response.data.risk_level,
+
+            action:
+            response.data.authentication_action,
+
+            message:
+            response.data.message,
+
+            triggers:
+            response.data.triggers,
+
+            featureScores:
+            response.data.feature_scores,
+
+            mlModelUsed:
+                response.data.ml_model_used ??
+                false,
+
+            mlModelType:
+                response.data.ml_model_type ??
+                null,
+
+            mlAnomalyScore:
+                response.data.ml_anomaly_score ??
+                null,
+
+            mlIsAnomaly:
+                response.data.ml_is_anomaly ??
+                null,
+        };
+
+    } catch (error) {
+        console.error(
+            "리스크 API 오류:",
+            JSON.stringify(
+                error.response?.data ??
+                error.message,
+                null,
+                2
+            )
+        );
+
+        throw error;
+    }
 };
 
 
 module.exports = {
-  sendRiskData,
+    sendRiskData,
 };
