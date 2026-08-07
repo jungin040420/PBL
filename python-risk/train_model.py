@@ -23,6 +23,10 @@ from isolation_model import (  # noqa: E402
 )
 
 
+# ============================================================
+# DB 설정
+# ============================================================
+
 DB_HOST = os.getenv(
     "DB_HOST",
     "localhost",
@@ -50,12 +54,18 @@ DB_NAME = os.getenv(
 )
 
 
+# REAL 데이터 최소 학습 건수
 MIN_TRAINING_ROWS = 30
 
 
+# ============================================================
+# MySQL REAL 학습 데이터 로드
+# ============================================================
+
 def load_training_data_from_mysql() -> np.ndarray:
     """
-    ml_feature_logs에서 REAL 데이터만 조회한다.
+    ml_feature_logs 테이블에서
+    data_source='REAL' 데이터만 가져온다.
     """
 
     if not DB_PASSWORD:
@@ -123,12 +133,19 @@ def load_training_data_from_mysql() -> np.ndarray:
     return feature_matrix
 
 
+# ============================================================
+# SYNTHETIC 테스트 데이터 생성
+# ============================================================
+
 def generate_synthetic_data(
     n: int = 200,
 ) -> np.ndarray:
     """
-    CI/파이프라인 검증용 합성 데이터.
-    실제 배포 모델 학습에는 사용하지 않는다.
+    CI / ML 파이프라인 검증용 합성 데이터.
+
+    주의:
+    이 데이터로 학습한 모델은
+    실제 로그인 위험 판정에 사용하지 않는다.
     """
 
     rng = np.random.default_rng(42)
@@ -207,6 +224,10 @@ def generate_synthetic_data(
     ).astype(float)
 
 
+# ============================================================
+# Feature 순서 출력
+# ============================================================
+
 def print_feature_order() -> None:
     print("학습 Feature 순서:")
 
@@ -218,6 +239,10 @@ def print_feature_order() -> None:
             f"  {index}. {feature_name}"
         )
 
+
+# ============================================================
+# Main
+# ============================================================
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -231,31 +256,49 @@ def main() -> None:
         "--contamination",
         type=float,
         default=0.05,
+        help="Isolation Forest 이상치 예상 비율",
     )
 
     parser.add_argument(
         "--min-rows",
         type=int,
         default=MIN_TRAINING_ROWS,
+        help="REAL 모델 학습에 필요한 최소 데이터 수",
     )
 
     parser.add_argument(
         "--allow-synthetic",
         action="store_true",
+        help=(
+            "REAL 데이터 부족 시 합성 데이터로 "
+            "ML 파이프라인만 검증"
+        ),
     )
 
     args = parser.parse_args()
+
+
+    # --------------------------------------------------------
+    # contamination 검증
+    # --------------------------------------------------------
 
     if not 0 < args.contamination <= 0.5:
         print(
             "[학습 중단] contamination은 "
             "0보다 크고 0.5 이하여야 합니다."
         )
+
         sys.exit(1)
+
 
     print_feature_order()
 
     model_type = "REAL"
+
+
+    # --------------------------------------------------------
+    # REAL 데이터 로드
+    # --------------------------------------------------------
 
     try:
         feature_matrix = (
@@ -269,12 +312,22 @@ def main() -> None:
             f"{row_count}건"
         )
 
+
+        # ----------------------------------------------------
+        # REAL 데이터 최소 개수 검사
+        # ----------------------------------------------------
+
         if row_count < args.min_rows:
             raise ValueError(
                 f"REAL 학습 데이터 부족: "
                 f"{row_count}건 / "
                 f"최소 {args.min_rows}건"
             )
+
+
+    # --------------------------------------------------------
+    # REAL 데이터 로드 실패 / 부족
+    # --------------------------------------------------------
 
     except (
         RuntimeError,
@@ -293,6 +346,11 @@ def main() -> None:
             )
 
             sys.exit(1)
+
+
+        # ----------------------------------------------------
+        # 테스트 목적 SYNTHETIC 학습
+        # ----------------------------------------------------
 
         model_type = "SYNTHETIC"
 
@@ -313,17 +371,39 @@ def main() -> None:
             generate_synthetic_data()
         )
 
+
+    # --------------------------------------------------------
+    # 학습 데이터 확인
+    # --------------------------------------------------------
+
     print(
         "학습 Matrix shape:",
         feature_matrix.shape,
     )
+
+
+    # --------------------------------------------------------
+    # Isolation Forest 학습
+    # --------------------------------------------------------
 
     model = train(
         feature_matrix,
         contamination=args.contamination,
     )
 
-    save(model)
+
+    # --------------------------------------------------------
+    # 모델 저장
+    # --------------------------------------------------------
+
+    save(
+        model
+    )
+
+
+    # --------------------------------------------------------
+    # 모델 Metadata 저장
+    # --------------------------------------------------------
 
     save_metadata(
         model_type=model_type,
@@ -331,11 +411,25 @@ def main() -> None:
         contamination=args.contamination,
     )
 
+
+    # --------------------------------------------------------
+    # 완료 로그
+    # --------------------------------------------------------
+
     print(
         "Isolation Forest 학습 완료"
     )
 
-    prin: {MODEL_META_PATH}"
+    print(
+        f"모델 유형: {model_type}"
+    )
+
+    print(
+        f"모델 저장 완료: {MODEL_PATH}"
+    )
+
+    print(
+        f"메타데이터 저장 완료: {MODEL_META_PATH}"
     )
 
 
