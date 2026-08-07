@@ -1,97 +1,155 @@
-const axios = require("axios");
-const { hashUserId } = require("../utils/anonymize");
+const crypto = require("crypto");
 
-const sendRiskData = async (userId, context) => {
-  const now = new Date();
-
-  const userIdHash = hashUserId(userId);
-
-  const payload = {
-    userIdHash,
-
-    deviceType:
-        context.deviceInfo?.deviceType || "unknown",
-
-    country:
-        context.country || "KR",
-
-    loginFrequency:
-        context.loginFrequency ?? 0,
-
-    failedLoginCount:
-        context.failedLoginCount ?? 0,
-
-    ipChanged:
-        context.ipChanged ?? false,
-
-    userAgentChanged:
-        context.userAgentChanged ?? false,
-
-    isNewDevice:
-        context.deviceChanged ?? false,
-
-    regionChanged:
-        context.locationChanged ?? false,
-
-    challengeResponseTime:
-        context.challengeResponseTime ?? null,
-
-    loginHour:
-        now.getHours(),
-
-    dayOfWeek:
-        now.getDay(),
-  };
-
-  // 실제 식별자·IP는 출력하지 않고 필드 존재 여부만 확인
-  console.log("리스크 전달 필드:", {
-    hasUserIdHash: Boolean(payload.userIdHash),
-    deviceType: payload.deviceType,
-    country: payload.country,
-    loginFrequency: payload.loginFrequency,
-    failedLoginCount: payload.failedLoginCount,
-    ipChanged: payload.ipChanged,
-    userAgentChanged: payload.userAgentChanged,
-    isNewDevice: payload.isNewDevice,
-    regionChanged: payload.regionChanged,
-    challengeResponseTime: payload.challengeResponseTime,
-    loginHour: payload.loginHour,
-    dayOfWeek: payload.dayOfWeek,
-  });
-
-  try {
-    const response = await axios.post(
-        process.env.RISK_API_URL ||
-        "http://localhost:5000/analyze",
-        payload,
-        {
-          timeout: 3000,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-    );
-
-    return {
-      score: response.data.risk_score,
-      level: response.data.risk_level,
-      action: response.data.authentication_action,
-      message: response.data.message,
-      triggers: response.data.triggers,
-      featureScores: response.data.feature_scores,
-    };
-  } catch (error) {
-    console.error(
-        "리스크 API 오류:",
-        JSON.stringify(
-            error.response?.data ?? error.message,
-            null,
-            2
-        )
-    );
-
-    throw error;
+// 랜덤 Salt 기반 SHA-256
+const anonymizeRandom = (value) => {
+  if (
+      value === null ||
+      value === undefined ||
+      value === ""
+  ) {
+    return null;
   }
+
+  const salt = crypto
+      .randomBytes(32)
+      .toString("hex");
+
+  return crypto
+      .createHash("sha256")
+      .update(String(value) + salt)
+      .digest("hex");
 };
 
-module.exports = { sendRiskData };
+
+// USERID_SALT 기반 사용자 ID 해시
+const hashUserId = (userId) => {
+  if (
+      userId === null ||
+      userId === undefined ||
+      userId === ""
+  ) {
+    throw new Error(
+        "[F-08] hashUserId: userId가 비어 있습니다."
+    );
+  }
+
+  const salt = process.env.USERID_SALT;
+
+  if (!salt) {
+    throw new Error(
+        "[F-08] USERID_SALT 환경변수가 없습니다."
+    );
+  }
+
+  if (salt.length < 64) {
+    throw new Error(
+        "[F-08] USERID_SALT는 hex 64자 이상이어야 합니다."
+    );
+  }
+
+  return crypto
+      .createHash("sha256")
+      .update(String(userId) + salt)
+      .digest("hex");
+};
+
+
+// COMPARE_SALT 기반 비교용 해시
+const hashForCompare = (value) => {
+  if (
+      value === null ||
+      value === undefined ||
+      value === ""
+  ) {
+    return null;
+  }
+
+  const salt = process.env.COMPARE_SALT;
+
+  if (!salt) {
+    throw new Error(
+        "[F-08] COMPARE_SALT 환경변수가 없습니다."
+    );
+  }
+
+  if (salt.length < 64) {
+    throw new Error(
+        "[F-08] COMPARE_SALT는 hex 64자 이상이어야 합니다."
+    );
+  }
+
+  if (salt === process.env.USERID_SALT) {
+    throw new Error(
+        "[F-08] COMPARE_SALT와 USERID_SALT는 서로 달라야 합니다."
+    );
+  }
+
+  return crypto
+      .createHash("sha256")
+      .update(String(value) + salt)
+      .digest("hex");
+};
+
+
+// User-Agent 비식별화
+const anonymizeUserAgent = (userAgent) => {
+  if (!userAgent) {
+    return {
+      hash: null,
+      os: "unknown",
+      browser: "unknown",
+    };
+  }
+
+  const hash = anonymizeRandom(userAgent);
+
+  let os = "unknown";
+
+  if (/windows/i.test(userAgent)) {
+    os = "Windows";
+  } else if (/macintosh|mac os/i.test(userAgent)) {
+    os = "macOS";
+  } else if (/android/i.test(userAgent)) {
+    os = "Android";
+  } else if (/iphone|ipad|ipod/i.test(userAgent)) {
+    os = "iOS";
+  } else if (/linux/i.test(userAgent)) {
+    os = "Linux";
+  }
+
+  let browser = "unknown";
+
+  if (/edg\//i.test(userAgent)) {
+    browser = "Edge";
+  } else if (/opr\/|opera/i.test(userAgent)) {
+    browser = "Opera";
+  } else if (/chrome/i.test(userAgent)) {
+    browser = "Chrome";
+  } else if (/firefox/i.test(userAgent)) {
+    browser = "Firefox";
+  } else if (/safari/i.test(userAgent)) {
+    browser = "Safari";
+  }
+
+  return {
+    hash,
+    os,
+    browser,
+  };
+};
+
+
+const generateFixedSalt = () => {
+  return crypto
+      .randomBytes(32)
+      .toString("hex");
+};
+
+
+module.exports = {
+  anonymizeRandom,
+  hashUserId,
+  hashForCompare,
+  anonymizeUserAgent,
+  generateFixedSalt,
+};

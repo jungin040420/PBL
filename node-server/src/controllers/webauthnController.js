@@ -4,10 +4,18 @@ const sessionManager = require("../services/sessionManager");
 const { sendRiskData } = require("../services/riskService");
 const { redisClient, db } = require("../../config/db");
 
+const {
+  hashUserId,
+  hashForCompare,
+} = require("../utils/anonymize");
+
 console.log("sendRiskData 타입:", typeof sendRiskData);
 
 
-// 등록 1단계: challenge 생성
+// ============================================================
+// 등록 1단계: Challenge 생성
+// ============================================================
+
 exports.registerStart = async (req, res) => {
   try {
     const { username, displayName } = req.body;
@@ -25,6 +33,7 @@ exports.registerStart = async (req, res) => {
         );
 
     return res.status(200).json(options);
+
   } catch (error) {
     console.error("registerStart 오류:", error);
 
@@ -35,7 +44,10 @@ exports.registerStart = async (req, res) => {
 };
 
 
+// ============================================================
 // 등록 2단계: 서명 검증 및 공개키 저장
+// ============================================================
+
 exports.registerFinish = async (req, res) => {
   try {
     const {
@@ -63,6 +75,7 @@ exports.registerFinish = async (req, res) => {
       success: true,
       message: "등록 완료",
     });
+
   } catch (error) {
     console.error("registerFinish 오류:", error);
 
@@ -73,7 +86,10 @@ exports.registerFinish = async (req, res) => {
 };
 
 
-// 로그인 1단계: challenge 생성
+// ============================================================
+// 로그인 1단계: Challenge 생성
+// ============================================================
+
 exports.loginStart = async (req, res) => {
   try {
     const { username } = req.body;
@@ -84,6 +100,9 @@ exports.loginStart = async (req, res) => {
       });
     }
 
+    /*
+     * Challenge 응답시간 측정을 위한 시작시간 저장
+     */
     await redisClient.set(
         `challenge:time:${username}`,
         Date.now(),
@@ -98,6 +117,7 @@ exports.loginStart = async (req, res) => {
         );
 
     return res.status(200).json(options);
+
   } catch (error) {
     console.error("loginStart 오류:", error);
 
@@ -108,7 +128,10 @@ exports.loginStart = async (req, res) => {
 };
 
 
-// 로그인 2단계: 서명 검증 및 세션 발급
+// ============================================================
+// 로그인 2단계: 서명 검증 + Risk 분석 + 세션 발급
+// ============================================================
+
 exports.loginFinish = async (req, res) => {
   try {
     const {
@@ -125,16 +148,19 @@ exports.loginFinish = async (req, res) => {
       });
     }
 
-    /*
-     * Challenge 응답시간 계산
-     */
+
+    // --------------------------------------------------------
+    // 1. Challenge 응답시간 계산
+    // --------------------------------------------------------
+
     const startTime = await redisClient.get(
         `challenge:time:${username}`
     );
 
-    const challengeResponseTime = startTime
-        ? Date.now() - Number(startTime)
-        : null;
+    const challengeResponseTime =
+        startTime
+            ? Date.now() - Number(startTime)
+            : null;
 
     context.challengeResponseTime =
         challengeResponseTime;
@@ -143,9 +169,11 @@ exports.loginFinish = async (req, res) => {
         `challenge:time:${username}`
     );
 
-    /*
-     * WebAuthn 로그인 검증
-     */
+
+    // --------------------------------------------------------
+    // 2. WebAuthn 로그인 검증
+    // --------------------------------------------------------
+
     const result =
         await verificationService.verifyLogin(
             username,
@@ -153,25 +181,39 @@ exports.loginFinish = async (req, res) => {
             credential
         );
 
-    console.log("verifyLogin 결과:", result);
+    console.log(
+        "verifyLogin 결과:",
+        result
+    );
 
-    /*
-     * 로그인 실패 처리
-     */
+
+    // --------------------------------------------------------
+    // 3. 로그인 검증 실패 처리
+    // --------------------------------------------------------
+
     if (!result.verified) {
-      const failKey = `login:fail:${username}`;
+      const failKey =
+          `login:fail:${username}`;
 
-      await redisClient.incr(failKey);
-      await redisClient.expire(failKey, 3600);
+      await redisClient.incr(
+          failKey
+      );
+
+      await redisClient.expire(
+          failKey,
+          3600
+      );
 
       return res.status(401).json({
         error: "로그인 검증 실패",
       });
     }
 
-    /*
-     * 로그인 실패 횟수 조회
-     */
+
+    // --------------------------------------------------------
+    // 4. 기존 로그인 실패 횟수 조회
+    // --------------------------------------------------------
+
     const failedLoginCount =
         Number(
             await redisClient.get(
@@ -186,18 +228,19 @@ exports.loginFinish = async (req, res) => {
         `login:fail:${username}`
     );
 
-    /*
-     * 사용자 DB PK 및 직전 로그인 정보 조회
-     */
+
+    // --------------------------------------------------------
+    // 5. 사용자 DB PK 조회
+    //
+    // F-08:
+    // 직전 IP / UA 등의 개인정보는 users 테이블에 저장하지 않는다.
+    // --------------------------------------------------------
+
     const [rows] = await db.query(
         `
         SELECT
           id,
-          username,
-          last_device,
-          last_ip,
-          last_user_agent,
-          last_country
+          username
         FROM users
         WHERE username = ?
         LIMIT 1
@@ -213,68 +256,162 @@ exports.loginFinish = async (req, res) => {
 
     const user = rows[0];
 
-    /*
-     * 최초 로그인 여부
-     */
-    const hasPreviousContext =
-        user.last_device !== null ||
-        user.last_ip !== null ||
-        user.last_user_agent !== null ||
-        user.last_country !== null;
+
+    // --------------------------------------------------------
+    // 6. F-08 비교용 해시 생성
+    // --------------------------------------------------------
+
+    const userIdHash =
+        hashUserId(user.id);
+
+    const currentIpHash =
+        hashForCompare(
+            context.ip
+        );
+
+    const currentUserAgentHash =
+        hashForCompare(
+            context.userAgent
+        );
 
     /*
-     * 직전 로그인 정보와 현재 로그인 정보 비교
+     * 현재 별도의 device fingerprint가 없기 때문에
+     * deviceType을 비교용 값으로 사용한다.
      *
-     * 주의:
-     * 현재는 기존 MySQL 컬럼을 이용한 임시 비교 구조다.
-     * 추후 Redis lastcontext:{userIdHash} 구조로 이전해야 한다.
+     * 추후 실제 device fingerprint가 추가되면
+     * 해당 값을 hashForCompare() 처리해서 교체 가능.
      */
-    context.deviceChanged =
-        hasPreviousContext &&
-        user.last_device !== context.userAgent;
+    const currentDeviceHash =
+        hashForCompare(
+            context.deviceInfo?.deviceType ||
+            "unknown"
+        );
 
-    context.ipChanged =
-        hasPreviousContext &&
-        user.last_ip !== context.ip;
+    const currentRegion =
+        context.country || "KR";
 
-    context.userAgentChanged =
-        hasPreviousContext &&
-        user.last_user_agent !==
-        context.userAgent;
 
-    context.locationChanged =
-        hasPreviousContext &&
-        user.last_country !== context.country;
+    // --------------------------------------------------------
+    // 7. Redis 직전 로그인 Context 조회
+    // --------------------------------------------------------
 
-    /*
-     * 현재 로그인 정보를 DB에 갱신
-     *
-     * 주의:
-     * 원본 IP와 User-Agent를 저장하는 구조는
-     * 추후 Redis 비교용 해시 구조로 교체해야 한다.
-     */
-    await db.query(
-        `
-        UPDATE users
-        SET
-          last_device = ?,
-          last_ip = ?,
-          last_user_agent = ?,
-          last_country = ?
-        WHERE id = ?
-      `,
-        [
-          context.userAgent || null,
-          context.ip || null,
-          context.userAgent || null,
-          context.country || null,
-          user.id,
-        ]
+    const lastContextKey =
+        `lastcontext:${userIdHash}`;
+
+    const previousContextRaw =
+        await redisClient.get(
+            lastContextKey
+        );
+
+    let previousContext = null;
+
+    if (previousContextRaw) {
+      try {
+        previousContext =
+            JSON.parse(
+                previousContextRaw
+            );
+      } catch (error) {
+        console.error(
+            "직전 로그인 컨텍스트 JSON 파싱 실패:",
+            error.message
+        );
+      }
+    }
+
+
+    // --------------------------------------------------------
+    // 8. 이전 로그인과 현재 로그인 비교
+    // --------------------------------------------------------
+
+    if (previousContext) {
+
+      context.ipChanged =
+          previousContext.ipHash !==
+          currentIpHash;
+
+      context.userAgentChanged =
+          previousContext.userAgentHash !==
+          currentUserAgentHash;
+
+      context.deviceChanged =
+          previousContext.deviceHash !==
+          currentDeviceHash;
+
+      context.locationChanged =
+          previousContext.region !==
+          currentRegion;
+
+    } else {
+
+      /*
+       * 이전 Context가 없으면 최초 로그인으로 판단.
+       *
+       * 비교 기준이 없기 때문에 변경 Feature는 false.
+       */
+      context.ipChanged = false;
+      context.userAgentChanged = false;
+      context.deviceChanged = false;
+      context.locationChanged = false;
+    }
+
+
+    console.log(
+        "로그인 Context 비교 결과:",
+        {
+          hasPreviousContext:
+              Boolean(previousContext),
+
+          ipChanged:
+          context.ipChanged,
+
+          userAgentChanged:
+          context.userAgentChanged,
+
+          deviceChanged:
+          context.deviceChanged,
+
+          locationChanged:
+          context.locationChanged,
+        }
     );
 
-    /*
-     * 로그인 빈도 계산
-     */
+
+    // --------------------------------------------------------
+    // 9. 현재 Context를 Redis에 저장
+    //
+    // 원본 IP / User-Agent는 저장하지 않는다.
+    // --------------------------------------------------------
+
+    const currentContext = {
+      ipHash:
+      currentIpHash,
+
+      userAgentHash:
+      currentUserAgentHash,
+
+      deviceHash:
+      currentDeviceHash,
+
+      region:
+      currentRegion,
+
+      updatedAt:
+          new Date().toISOString(),
+    };
+
+    await redisClient.set(
+        lastContextKey,
+        JSON.stringify(
+            currentContext
+        )
+    );
+
+
+    // --------------------------------------------------------
+    // 10. 로그인 빈도 계산
+    // --------------------------------------------------------
+
     const loginFrequencyKey =
         `login:count:${username}`;
 
@@ -291,21 +428,36 @@ exports.loginFinish = async (req, res) => {
     context.loginFrequency =
         loginFrequency;
 
-    /*
-     * Python Risk API 호출
-     */
+
+    // --------------------------------------------------------
+    // 11. Python Risk API 호출
+    // --------------------------------------------------------
+
     let riskScore = 0;
     let riskLevel = "low";
     let riskAction = "ACTIVE";
+
     let riskMessage =
         "리스크 분석 서버 응답 없음";
+
     let riskTriggers = [];
     let riskFeatureScores = {};
 
+
     try {
+
       /*
-       * username이 아니라 users.id를 전달한다.
-       * riskService.js에서 hashUserId(user.id)를 호출한다.
+       * username이 아닌 users.id를 전달한다.
+       *
+       * riskService.js에서:
+       *
+       * hashUserId(user.id)
+       * → userIdHash
+       *
+       * hashForCompare(context.ip)
+       * → ipHash
+       *
+       * 로 변환해서 Python에 전달한다.
        */
       const riskResult =
           await sendRiskData(
@@ -332,6 +484,7 @@ exports.loginFinish = async (req, res) => {
       riskFeatureScores =
           riskResult.featureScores ?? {};
 
+
       console.log(
           "리스크 분석 완료:",
           {
@@ -340,53 +493,75 @@ exports.loginFinish = async (req, res) => {
             riskAction,
           }
       );
+
     } catch (error) {
+
       console.error(
           "리스크 스코어 요청 실패:",
           error.message
       );
 
       /*
-       * 현재는 Rule API 실패 시 로그인 흐름 유지.
-       * 추후 정책에 따라 fail-open 또는 fail-closed 확정 필요.
+       * 현재 개발 단계에서는
+       * Risk API 장애 시 로그인 흐름을 유지한다.
+       *
+       * 추후 fail-open / fail-closed 정책 확정 필요.
        */
     }
 
-    /*
-     * 위험도에 따른 인증 처리
-     */
+
+    // --------------------------------------------------------
+    // 12. Risk Action 처리
+    // --------------------------------------------------------
+
     if (riskAction === "BLOCKED") {
+
       return res.status(403).json({
         success: false,
+
         message:
             riskMessage ||
             "위험도가 높아 로그인이 차단되었습니다.",
+
         riskScore,
         riskLevel,
         riskAction,
-        triggers: riskTriggers,
+
+        triggers:
+        riskTriggers,
       });
     }
 
+
     if (riskAction === "RE_AUTH") {
+
       return res.status(200).json({
         success: false,
-        requiresReauthentication: true,
+
+        requiresReauthentication:
+            true,
+
         message:
             riskMessage ||
             "추가 인증이 필요합니다.",
+
         riskScore,
         riskLevel,
         riskAction,
-        triggers: riskTriggers,
+
+        triggers:
+        riskTriggers,
+
         featureScores:
         riskFeatureScores,
       });
     }
 
-    /*
-     * LOW 위험도일 경우 세션 생성
-     */
+
+    // --------------------------------------------------------
+    // 13. LOW Risk → 세션 생성
+    // --------------------------------------------------------
+
     const session =
         await sessionManager.createSession(
             username,
@@ -396,7 +571,9 @@ exports.loginFinish = async (req, res) => {
 
     console.log(
         "세션 생성 완료:",
-        Boolean(session?.token)
+        Boolean(
+            session?.token
+        )
     );
 
     if (!session || !session.token) {
@@ -404,6 +581,11 @@ exports.loginFinish = async (req, res) => {
           "세션 토큰 생성 실패"
       );
     }
+
+
+    // --------------------------------------------------------
+    // 14. 세션 Cookie 저장
+    // --------------------------------------------------------
 
     const isNgrok =
         req.headers.host?.includes(
@@ -415,20 +597,31 @@ exports.loginFinish = async (req, res) => {
         session.token,
         {
           httpOnly: true,
-          secure: Boolean(isNgrok),
-          sameSite: isNgrok
-              ? "none"
-              : "lax",
+
+          secure:
+              Boolean(isNgrok),
+
+          sameSite:
+              isNgrok
+                  ? "none"
+                  : "lax",
+
           maxAge:
               1000 * 60 * 60,
         }
     );
+
+
+    // --------------------------------------------------------
+    // 15. 로그인 성공 응답
+    // --------------------------------------------------------
 
     return res.status(200).json({
       success: true,
       message: "로그인 성공",
 
       context: {
+
         deviceType:
             context.deviceInfo
                 ?.deviceType ||
@@ -448,12 +641,16 @@ exports.loginFinish = async (req, res) => {
       riskLevel,
       riskAction,
       riskMessage,
+
       triggers:
       riskTriggers,
+
       featureScores:
       riskFeatureScores,
     });
+
   } catch (error) {
+
     console.error(
         "loginFinish 오류:",
         error
@@ -466,9 +663,13 @@ exports.loginFinish = async (req, res) => {
 };
 
 
+// ============================================================
 // 로그아웃
+// ============================================================
+
 exports.logout = async (req, res) => {
   try {
+
     const sessionToken =
         req.cookies.session;
 
@@ -478,13 +679,17 @@ exports.logout = async (req, res) => {
       );
     }
 
-    res.clearCookie("session");
+    res.clearCookie(
+        "session"
+    );
 
     return res.status(200).json({
       success: true,
       message: "로그아웃 완료",
     });
+
   } catch (error) {
+
     console.error(
         "logout 오류:",
         error
@@ -497,12 +702,16 @@ exports.logout = async (req, res) => {
 };
 
 
+// ============================================================
 // 세션 검증
+// ============================================================
+
 exports.verifySession = async (
     req,
     res
 ) => {
   try {
+
     const sessionToken =
         req.cookies.session;
 
@@ -530,7 +739,9 @@ exports.verifySession = async (
       username:
       result.username,
     });
+
   } catch (error) {
+
     console.error(
         "verifySession 오류:",
         error

@@ -24,3 +24,11 @@ api-server/__pycache__/
 # OS
 .DS_Store
 Thumbs.db
+# Environment files
+node-server/.env.dev
+.env
+.env.*
+!.env.example
+
+# IntelliJ
+.idea/
