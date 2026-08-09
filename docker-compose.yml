@@ -1,11 +1,35 @@
 services:
-  nginx:
-    image: nginx:latest
-    container_name: nginx
+  node:
+    build:
+      context: ./node-server
+      dockerfile: Dockerfile
+    container_name: auth_node
+    env_file:
+      - ./node-server/.env.dev
     ports:
-      - "80:80"
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHON_RISK_URL=http://python:5000
+      - TZ=Asia/Seoul
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./node-server:/app
+      - /app/node_modules
     networks:
-      - dev-network
+      - auth_network
+    restart: unless-stopped
 
   python:
     build:
@@ -15,67 +39,65 @@ services:
     ports:
       - "5000:8000"
     environment:
-      - MYSQL_HOST=auth_mysql
+      - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=authpass
-      - MYSQL_DATABASE=mfa_db
-      - REDIS_HOST=auth_redis
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
       - TZ=Asia/Seoul
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./python-risk:/app
     networks:
-      - dev-network
+      - auth_network
     restart: unless-stopped
-
-  ml-service:
-    build:
-      context: ./ml-service
-      dockerfile: Dockerfile
-    volumes:
-      - ./ml-service:/app
-    command: python main.py --reload
-    environment:
-      - TZ=Asia/Seoul
-    networks:
-      - dev-network
 
   mysql:
     image: mysql:8.0
     container_name: auth_mysql
-    environment:
-      - MYSQL_ROOT_PASSWORD=rootpass
-      - MYSQL_DATABASE=mfa_db
-      - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=HF036
-      - TZ=Asia/Seoul
     ports:
       - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - TZ=Asia/Seoul
     volumes:
       - mysql_data:/var/lib/mysql
       - ./db:/docker-entrypoint-initdb.d
-    command: --event-scheduler=ON
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
     networks:
-      - dev-network
+      - auth_network
+    restart: unless-stopped
 
   redis:
-    image: redis:7.0-alpine
+    image: redis:7.2
     container_name: auth_redis
     ports:
       - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - dev-network
+      - auth_network
+    restart: unless-stopped
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
@@ -83,12 +105,10 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-    # F-08 규칙 1·3: 원본 IP/username 평문 저장 데이터를 호스트/외부에 노출하지 않도록
-    # 9200 포트를 호스트로 게시하지 않음 (dev-network 내부 컨테이너 간 통신만 허용)
     expose:
       - "9200"
     networks:
-      - dev-network
+      - auth_network
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.5.0
@@ -96,30 +116,12 @@ services:
     ports:
       - "5601:5601"
     networks:
-      - dev-network
-
-  node-server:
-    build: ./node-server
-    container_name: node-server
-    ports:
-      - "3000:3000"
-    environment:
-      - TZ=Asia/Seoul
-    env_file:
-      - ./node-server/.env.dev
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_started
-    networks:
-      - dev-network
-
-networks:
-  dev-network:
-    driver: bridge
+      - auth_network
 
 volumes:
   mysql_data:
+  redis_data:
+
+networks:
+  auth_network:
+    driver: bridge

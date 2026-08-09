@@ -1,0 +1,5 @@
+﻿scenario_type,test_count,pass_count,fail_count,pass_rate_percent,ml_anomaly_count,ml_anomaly_rate_percent,average_rule_score,average_ml_anomaly_score
+NORMAL,50,50,0,100.0,0,0.0,2.3,-0.436643
+MEDIUM,25,25,0,100.0,21,84.0,49.0,-0.635445
+HIGH,15,15,0,100.0,15,100.0,100.0,-0.744825
+TOTAL,90,90,0,100.0,36,40.0,,

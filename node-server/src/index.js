@@ -1,19 +1,20 @@
-const path = require('path');
-const dotenv = require('dotenv');
-dotenv.config({ 
-  path: path.join(__dirname, '../.env.dev')
+const path = require("path");
+const dotenv = require("dotenv");
+
+dotenv.config({
+    path: path.join(__dirname, "../.env.dev"),
 });
 
-console.log('RP_ID:', process.env.RP_ID);
-console.log('ORIGIN:', process.env.ORIGIN);
+console.log("RP_ID:", process.env.RP_ID);
+console.log("ORIGIN:", process.env.ORIGIN);
 
-console.log('index.js 실행됨');
-console.log('app.js 불러오는 중...');
+console.log("index.js 실행됨");
+console.log("app.js 불러오는 중...");
 
-const app = require('./app');
+const app = require("./app");
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`서버 실행 중: http://localhost:${PORT}`);
+    console.log(`서버 실행 중: http://localhost:${PORT}`);
 });
