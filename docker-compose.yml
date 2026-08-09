@@ -45,10 +45,10 @@ services:
     image: mysql:8.0
     container_name: auth_mysql
     environment:
-      - MYSQL_ROOT_PASSWORD=9789
+      - MYSQL_ROOT_PASSWORD=rootpass
       - MYSQL_DATABASE=mfa_db
       - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=authpass
+      - MYSQL_PASSWORD=HF036
       - TZ=Asia/Seoul
     ports:
       - "3306:3306"
@@ -57,7 +57,7 @@ services:
       - ./db:/docker-entrypoint-initdb.d
     command: --event-scheduler=ON
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p9789"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -106,7 +106,7 @@ services:
     environment:
       - TZ=Asia/Seoul
     env_file:
-      - .env.dev
+      - ./node-server/.env.dev
     depends_on:
       mysql:
         condition: service_healthy
