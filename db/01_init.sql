@@ -1,8 +1,9 @@
+CREATE USER IF NOT EXISTS 'authuser'@'%' IDENTIFIED BY '<AUTH_USER_PASSWORD>';
+
 CREATE DATABASE IF NOT EXISTS mfa_db;
 USE mfa_db;
 
 GRANT ALL PRIVILEGES ON mfa_db.* TO 'authuser'@'%';
-FLUSH PRIVILEGES;
 
 CREATE TABLE IF NOT EXISTS users (
   id            INT AUTO_INCREMENT PRIMARY KEY,
@@ -27,6 +28,14 @@ CREATE TABLE IF NOT EXISTS passkeys (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id          BIGINT       AUTO_INCREMENT PRIMARY KEY,
+  event_type  VARCHAR(50)  NOT NULL,
+  payload     TEXT         NOT NULL,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 세션 테이블(추후 코드 수정)
 --  - mysql과의 연동
 --  - 대시보드 연결
@@ -47,14 +56,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 INSERT INTO users (username, display_name, email)
 VALUES ('testuser', '테스트 유저', 'test@test.com');
 
+-- authdb
 CREATE DATABASE IF NOT EXISTS authdb;
 USE authdb;
 
--- F-12: 멀티 소스 접속 로그
+GRANT SELECT, INSERT, UPDATE, DELETE ON authdb.* TO 'authuser'@'%';
+
+-- 멀티 소스 접속 로그
 CREATE TABLE IF NOT EXISTS access_logs (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id     VARCHAR(64),
-    ip          VARCHAR(45)   NOT NULL,
+    ip          VARCHAR(45)   NOT NULL, -- 추후 수정 필요
     device      VARCHAR(255),
     user_agent  TEXT,
     location    VARCHAR(100),
@@ -67,7 +79,7 @@ CREATE TABLE IF NOT EXISTS access_logs (
 CREATE TABLE IF NOT EXISTS risk_scores (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id     VARCHAR(64),
-    ip          VARCHAR(45),
+    ip          VARCHAR(45),  -- 추후 수정 필요
     device      VARCHAR(255),
     score       INT           NOT NULL DEFAULT 0,
     reason      JSON,
@@ -91,3 +103,5 @@ CREATE INDEX idx_access_created ON access_logs(created_at);
 CREATE INDEX idx_risk_user      ON risk_scores(user_id);
 CREATE INDEX idx_unified_source ON unified_logs(source);
 CREATE INDEX idx_unified_created ON unified_logs(created_at);
+
+FLUSH PRIVILEGES;
