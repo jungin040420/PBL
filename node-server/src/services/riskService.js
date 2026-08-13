@@ -65,6 +65,14 @@ const sendRiskData = async (
 
         dayOfWeek:
             now.getDay(),
+
+        signCountAbnormal:
+            context.signCountAbnormal ??
+            false,
+
+        credentialMismatch:
+            context.credentialMismatch ??
+            false,
     };
 
     console.log(
