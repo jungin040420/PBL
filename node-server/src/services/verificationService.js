@@ -1,52 +1,100 @@
-const { 
+const {
   verifyRegistrationResponse,
-  verifyAuthenticationResponse 
+  verifyAuthenticationResponse
 } = require('@simplewebauthn/server');
+
 const { db } = require('../../config/db');
 const { verifyChallenge } = require('./challenge');
 
 const rpID = process.env.RP_ID || 'localhost';
 
-exports.verifyRegistration = async (username, email, challengeId, credential) => {
+
+exports.verifyRegistration = async (
+    username,
+    email,
+    challengeId,
+    credential
+) => {
 
   const clientDataJSON = JSON.parse(
-    Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8')
+      Buffer.from(
+          credential.response.clientDataJSON,
+          'base64url'
+      ).toString('utf8')
   );
-  const submittedChallenge = clientDataJSON.challenge;
-  console.log('submittedChallenge:', submittedChallenge);
 
-  const challengeResult = await verifyChallenge(
-    username,
-    challengeId,
-    submittedChallenge
+  const submittedChallenge =
+      clientDataJSON.challenge;
+
+  console.log(
+      'submittedChallenge:',
+      submittedChallenge
   );
+
+
+  const challengeResult =
+      await verifyChallenge(
+          username,
+          challengeId,
+          submittedChallenge
+      );
+
 
   if (!challengeResult.valid) {
-    throw new Error(`challenge 검증 실패: ${challengeResult.reason}`);
+    throw new Error(
+        `challenge 검증 실패: ${challengeResult.reason}`
+    );
   }
 
-  const expectedOrigin = process.env.ORIGIN || `http://${rpID}:3000`;
+
+  const expectedOrigin =
+      process.env.ORIGIN ||
+      `http://${rpID}:3000`;
+
 
   let verification;
+
   try {
-    verification = await verifyRegistrationResponse({
-      response: credential,
-      expectedChallenge: submittedChallenge,
-      expectedOrigin,
-      expectedRPID: rpID,
-      requireUserVerification: false
-    });
+
+    verification =
+        await verifyRegistrationResponse({
+          response: credential,
+          expectedChallenge: submittedChallenge,
+          expectedOrigin,
+          expectedRPID: rpID,
+          requireUserVerification: false
+        });
+
   } catch (error) {
-    console.error('등록 서명 검증 오류:', error);
-    console.error('오류 메시지:', error.message);
-    throw new Error('서명 검증 실패');
+
+    console.error(
+        '등록 서명 검증 오류:',
+        error
+    );
+
+    console.error(
+        '오류 메시지:',
+        error.message
+    );
+
+    throw new Error(
+        '서명 검증 실패'
+    );
   }
+
 
   if (!verification.verified) {
-    return { verified: false };
+    return {
+      verified: false
+    };
   }
 
-  const { registrationInfo } = verification;
+
+  const {
+    registrationInfo
+  } = verification;
+
+
   const {
     credential: {
       id: credentialID,
@@ -55,118 +103,295 @@ exports.verifyRegistration = async (username, email, challengeId, credential) =>
     }
   } = registrationInfo;
 
-  const [userRows] = await db.query(
-    'SELECT id FROM users WHERE username = ?',
-    [username]
-  );
+
+  const [userRows] =
+      await db.query(
+          'SELECT id FROM users WHERE username = ?',
+          [username]
+      );
+
 
   let userId;
+
+
   if (userRows.length === 0) {
-    const [result] = await db.query(
-      'INSERT INTO users (username, display_name, email) VALUES (?, ?, ?)',
-      [username, username, email || null]
-    );
-    userId = result.insertId;
+
+    const [result] =
+        await db.query(
+            `INSERT INTO users
+         (username, display_name, email)
+         VALUES (?, ?, ?)`,
+            [
+              username,
+              username,
+              email || null
+            ]
+        );
+
+    userId =
+        result.insertId;
+
   } else {
-    userId = userRows[0].id;
+
+    userId =
+        userRows[0].id;
   }
 
+
   await db.query(
-    `INSERT INTO passkeys 
+      `INSERT INTO passkeys
      (user_id, credential_id, public_key, counter)
      VALUES (?, ?, ?, ?)`,
-    [
-      userId,
-      credentialID,
-      Buffer.from(credentialPublicKey).toString('base64url'),
-      counter,
-    ]
+      [
+        userId,
+        credentialID,
+        Buffer.from(
+            credentialPublicKey
+        ).toString('base64url'),
+        counter,
+      ]
   );
 
-  return { verified: true };
+
+  return {
+    verified: true
+  };
 };
 
-exports.verifyLogin = async (username, challengeId, credential) => {
 
-  const clientDataJSON = JSON.parse(
-    Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8')
-  );
-  const submittedChallenge = clientDataJSON.challenge;
-  console.log('submittedChallenge:', submittedChallenge);
-
-  const challengeResult = await verifyChallenge(
+exports.verifyLogin = async (
     username,
     challengeId,
-    submittedChallenge
+    credential
+) => {
+
+  const clientDataJSON =
+      JSON.parse(
+          Buffer.from(
+              credential.response.clientDataJSON,
+              'base64url'
+          ).toString('utf8')
+      );
+
+
+  const submittedChallenge =
+      clientDataJSON.challenge;
+
+
+  console.log(
+      'submittedChallenge:',
+      submittedChallenge
   );
+
+
+  // ========================================================
+  // Challenge 검증
+  // ========================================================
+
+  const challengeResult =
+      await verifyChallenge(
+          username,
+          challengeId,
+          submittedChallenge
+      );
+
 
   if (!challengeResult.valid) {
-    throw new Error(`challenge 검증 실패: ${challengeResult.reason}`);
+
+    throw new Error(
+        `challenge 검증 실패: ${challengeResult.reason}`
+    );
   }
 
-  const [rows] = await db.query(
-    `SELECT p.* FROM passkeys p
-     JOIN users u ON p.user_id = u.id
-     WHERE u.username = ? AND p.credential_id = ?
-     AND p.is_active = 1`,
-    [username, credential.id]
-  );
+
+  // ========================================================
+  // 등록된 Passkey 조회
+  // ========================================================
+
+  const [rows] =
+      await db.query(
+          `SELECT p.*
+       FROM passkeys p
+       JOIN users u
+         ON p.user_id = u.id
+       WHERE u.username = ?
+         AND p.credential_id = ?
+         AND p.is_active = 1`,
+          [
+            username,
+            credential.id
+          ]
+      );
+
 
   if (rows.length === 0) {
-    return { verified: false };
+
+    return {
+      verified: false,
+      signCountAbnormal: false,
+    };
   }
 
-  const passkey = rows[0];
-  const expectedOrigin = process.env.ORIGIN || `http://${rpID}:3000`;
+
+  const passkey =
+      rows[0];
+
+
+  const expectedOrigin =
+      process.env.ORIGIN ||
+      `http://${rpID}:3000`;
+
+
+  // ========================================================
+  // WebAuthn 인증 검증
+  // ========================================================
 
   let verification;
+
+
   try {
-    verification = await verifyAuthenticationResponse({
-      response: credential,
-      expectedChallenge: submittedChallenge, 
-      expectedOrigin,
-      expectedRPID: rpID,
-      requireUserVerification: false,
-      credential: {
-        id: Buffer.from(passkey.credential_id, 'base64url'),
-        publicKey: Buffer.from(passkey.public_key, 'base64url'),
-        counter: passkey.counter,
-      },
-    });
+
+    verification =
+        await verifyAuthenticationResponse({
+
+          response:
+          credential,
+
+          expectedChallenge:
+          submittedChallenge,
+
+          expectedOrigin,
+
+          expectedRPID:
+          rpID,
+
+          requireUserVerification:
+              false,
+
+          credential: {
+
+            id:
+                Buffer.from(
+                    passkey.credential_id,
+                    'base64url'
+                ),
+
+            publicKey:
+                Buffer.from(
+                    passkey.public_key,
+                    'base64url'
+                ),
+
+            counter:
+            passkey.counter,
+          },
+        });
+
   } catch (error) {
-    console.error('로그인 서명 검증 오류:', error);
-    console.error('오류 메시지:', error.message);
-    throw new Error('서명 검증 실패');
-  }
 
-  if (!verification.verified) {
-    return { verified: false };
-  }
-
-  const { authenticationInfo } = verification;
-  const { newCounter } = authenticationInfo;
-
-  // ⚠️ 직접 구현 권장 - signCount 이상 탐지
-  if (passkey.counter > 0 && newCounter <= passkey.counter) {
-    console.error('signCount 이상 탐지:', {
-      username,
-      expectedCounter: passkey.counter + 1,
-      receivedCounter: newCounter,
-      time: new Date().toISOString(),
-    });
-
-    await db.query(
-      'UPDATE passkeys SET is_active = 0 WHERE id = ?',
-      [passkey.id]
+    console.error(
+        '로그인 서명 검증 오류:',
+        error
     );
 
-    throw new Error('비정상적인 인증 시도 감지');
+    console.error(
+        '오류 메시지:',
+        error.message
+    );
+
+    throw new Error(
+        '서명 검증 실패'
+    );
   }
 
+
+  if (!verification.verified) {
+
+    return {
+      verified: false,
+      signCountAbnormal: false,
+    };
+  }
+
+
+  // ========================================================
+  // signCount 검사
+  // ========================================================
+
+  const {
+    authenticationInfo
+  } = verification;
+
+
+  const {
+    newCounter
+  } = authenticationInfo;
+
+
+  const signCountAbnormal =
+      passkey.counter > 0 &&
+      newCounter <= passkey.counter;
+
+
+  if (signCountAbnormal) {
+
+    console.error(
+        'signCount 이상 탐지:',
+        {
+          username,
+
+          expectedCounter:
+              passkey.counter + 1,
+
+          receivedCounter:
+          newCounter,
+
+          time:
+              new Date().toISOString(),
+        }
+    );
+
+
+    // 이상 Counter가 탐지된 Passkey 비활성화
+    await db.query(
+        `UPDATE passkeys
+       SET is_active = 0
+       WHERE id = ?`,
+        [
+          passkey.id
+        ]
+    );
+
+
+    // 기존 보안 정책 유지:
+    // signCount 이상이면 로그인 즉시 차단
+    throw new Error(
+        '비정상적인 인증 시도 감지'
+    );
+  }
+
+
+  // ========================================================
+  // 정상 Counter 업데이트
+  // ========================================================
+
   await db.query(
-    'UPDATE passkeys SET counter = ? WHERE id = ?',
-    [newCounter, passkey.id]
+      `UPDATE passkeys
+     SET counter = ?
+     WHERE id = ?`,
+      [
+        newCounter,
+        passkey.id
+      ]
   );
 
-  return { verified: true };
+
+  // ========================================================
+  // 로그인 검증 결과
+  // ========================================================
+
+  return {
+    verified: true,
+    signCountAbnormal: false,
+  };
 };

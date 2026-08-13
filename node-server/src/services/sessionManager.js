@@ -1,6 +1,5 @@
 const { redisClient } = require('../../config/db'); 
-const {
-  createSession,
+const {createSession,
   refreshSession,
   updateSessionStatus,
   deleteSession: _deleteSession

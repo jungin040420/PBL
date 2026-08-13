@@ -17,7 +17,7 @@ services:
       - MYSQL_DATABASE=${DB_NAME}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - PYTHON_RISK_URL=http://python:5000
+      - PYTHON_RISK_URL=http://python:8000
       - TZ=Asia/Seoul
     depends_on:
       mysql:
@@ -37,7 +37,7 @@ services:
       dockerfile: Dockerfile
     container_name: auth_python
     ports:
-      - "5000:8000"
+      - "8000:8000"
     environment:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306

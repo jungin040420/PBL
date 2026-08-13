@@ -188,6 +188,15 @@ exports.loginFinish = async (req, res) => {
 
 
     // --------------------------------------------------------
+    // 2-1. signCount 이상 여부를 Risk Context에 반영
+    // --------------------------------------------------------
+
+    context.signCountAbnormal =
+        result.signCountAbnormal ??
+        false;
+
+
+    // --------------------------------------------------------
     // 3. 로그인 검증 실패 처리
     // --------------------------------------------------------
 
@@ -284,6 +293,10 @@ exports.loginFinish = async (req, res) => {
     const currentRegion =
         context.country || "KR";
 
+    // Risk API의 loginRegion 수집값
+    context.loginRegion =
+        currentRegion;
+
 
     // --------------------------------------------------------
     // 7. Redis 직전 로그인 Context 조회
@@ -364,6 +377,9 @@ exports.loginFinish = async (req, res) => {
 
           locationChanged:
           context.locationChanged,
+
+          signCountAbnormal:
+          context.signCountAbnormal,
         }
     );
 
@@ -691,6 +707,14 @@ exports.loginFinish = async (req, res) => {
 
         isNightAccess:
             context.isNightAccess ??
+            false,
+
+        loginRegion:
+            context.loginRegion ??
+            "KR",
+
+        signCountAbnormal:
+            context.signCountAbnormal ??
             false,
       },
 
