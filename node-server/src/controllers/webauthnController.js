@@ -6,6 +6,7 @@ const axios = require('axios');
 const {sendRiskData} = require('../services/riskService');
 const { redisClient } = require('../../config/db');
 const { db } = require('../../config/db');
+const { hashForCompare } = require('../utils/anonymize');
 
 console.log('sendRiskData 타입:', typeof sendRiskData);
 
@@ -133,11 +134,13 @@ exports.loginFinish = async (req, res) => {
 
     // 로그인 실패 시
     if (!result.verified) {
+      const ipHash = hashForCompare(context.ip || 'unknown');
+
       await db.query(
         `INSERT INTO access_logs 
-        (user_id, ip, auth_result, reason)
+        (user_id, ip_hash, auth_result, reason)
         VALUES (?, ?, 'fail', ?)`,
-        [username, context.ip || 'unknown', result.reason || 'VERIFICATION_FAILED']
+        [username, ipHash, result.reason || 'VERIFICATION_FAILED']
       );
 
       await redisClient.incr(`login:fail:${username}`);
@@ -152,23 +155,39 @@ exports.loginFinish = async (req, res) => {
       return res.status(401).json({ error: '로그인 검증 실패', reason: result.reason });
     }
 
-        const failedLoginCount = parseInt(await redisClient.get(`login:fail:${username}`)) || 0;
+    const failedLoginCount = parseInt(await redisClient.get(`login:fail:${username}`)) || 0;
     context.failedLoginCount = failedLoginCount;
     await redisClient.del(`login:fail:${username}`);
 
-    const [rows] = await db.query(
-      'SELECT last_device, last_ip, last_user_agent, last_country FROM users WHERE username = ?',
-      [username]
-    );
+    const userIdHash = hashForCompare(username);
+    const contextKey = `lastcontext:${userIdHash}`;
+    const prevContext = await redisClient.hGetAll(contextKey);
 
-    context.deviceChanged = rows[0]?.last_device !== context.userAgent;
-    context.ipChanged = rows[0]?.last_ip !== context.ip;
-    context.userAgentChanged = rows[0]?.last_user_agent !== context.userAgent;
-    context.locationChanged = rows[0]?.last_country !== context.country;
+    const currentDeviceHash = hashForCompare(JSON.stringify(context.deviceInfo || {}));
+    const currentIpHash = hashForCompare(context.ip);
+    const currentUaHash = hashForCompare(context.userAgent);
+    const currentCountryHash = hashForCompare(context.country);
+
+    context.hasPreviousContext = Object.keys(prevContext).length > 0;
+
+    context.deviceChanged = context.hasPreviousContext ? prevContext.deviceHash !== currentDeviceHash : false;
+    context.ipChanged = context.hasPreviousContext ? prevContext.ipHash !== currentIpHash : false;
+    context.userAgentChanged = context.hasPreviousContext ? prevContext.uaHash !== currentUaHash : false;
+    context.locationChanged = context.hasPreviousContext ? prevContext.countryHash !== currentCountryHash : false;
+
+    await redisClient.hSet(contextKey, {
+      deviceHash: currentDeviceHash,
+      ipHash: currentIpHash,
+      uaHash: currentUaHash,
+      countryHash: currentCountryHash,
+    });
+    await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
 
     await db.query(
-      'UPDATE users SET last_device = ?, last_ip = ?, last_user_agent = ?, last_country = ? WHERE username = ?',
-      [context.userAgent, context.ip, context.userAgent, context.country, username]
+      `INSERT INTO access_logs 
+      (user_id, ip_hash, auth_result, reason)
+      VALUES (?, ?, 'success', ?)`,
+      [username, currentIpHash, 'LOGIN_SUCCESS']
     );
 
     const loginFrequency = await redisClient.incr(`login:count:${username}`);

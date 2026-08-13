@@ -83,6 +83,10 @@ const sendRiskData = async (
         credentialMismatch:
             context.credentialMismatch ??
             false,
+        
+        hasPreviousContext:
+            context.hasPreviousContext ??
+            false,
     };
 
 
