@@ -32,6 +32,11 @@ const sendRiskData = async (
             context.country ??
             "KR",
 
+        // 현재 로그인 지역 자체
+        loginRegion:
+            context.country ??
+            "KR",
+
         loginFrequency:
             context.loginFrequency ??
             0,
@@ -56,6 +61,11 @@ const sendRiskData = async (
             context.locationChanged ??
             false,
 
+        // WebAuthn signCount 이상 여부
+        signCountAbnormal:
+            context.signCountAbnormal ??
+            false,
+
         challengeResponseTime:
             context.challengeResponseTime ??
             null,
@@ -75,6 +85,7 @@ const sendRiskData = async (
             false,
     };
 
+
     console.log(
         "리스크 전달 필드:",
         {
@@ -89,6 +100,9 @@ const sendRiskData = async (
 
             country:
             payload.country,
+
+            loginRegion:
+            payload.loginRegion,
 
             loginFrequency:
             payload.loginFrequency,
@@ -108,6 +122,9 @@ const sendRiskData = async (
             regionChanged:
             payload.regionChanged,
 
+            signCountAbnormal:
+            payload.signCountAbnormal,
+
             challengeResponseTime:
             payload.challengeResponseTime,
 
@@ -119,11 +136,12 @@ const sendRiskData = async (
         }
     );
 
+
     try {
         const response =
             await axios.post(
                 process.env.RISK_API_URL ||
-                "http://localhost:5000/analyze",
+                "http://localhost:8000/analyze",
 
                 payload,
 
@@ -136,6 +154,7 @@ const sendRiskData = async (
                     },
                 }
             );
+
 
         return {
             score:
@@ -174,6 +193,7 @@ const sendRiskData = async (
         };
 
     } catch (error) {
+
         console.error(
             "리스크 API 오류:",
             JSON.stringify(

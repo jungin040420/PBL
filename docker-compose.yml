@@ -1,7 +1,4 @@
-
-
 services:
-  # Node.js 서버
   node:
     build:
       context: ./node-server
@@ -17,10 +14,11 @@ services:
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
       - MYSQL_PASSWORD=${DB_PASSWORD}
-      - MYSQL_DATABASE=authdb
+      - MYSQL_DATABASE=${DB_NAME}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PYTHON_RISK_URL=http://python:8000
+      - TZ=Asia/Seoul
     depends_on:
       mysql:
         condition: service_healthy
@@ -32,9 +30,7 @@ services:
     networks:
       - auth_network
     restart: unless-stopped
-    
 
-  # Python 리스크 계산 서버
   python:
     build:
       context: ./python-risk
@@ -46,10 +42,11 @@ services:
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=authpass
-      - MYSQL_DATABASE=authdb
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - TZ=Asia/Seoul
     depends_on:
       mysql:
         condition: service_healthy
@@ -61,17 +58,20 @@ services:
       - auth_network
     restart: unless-stopped
 
-  # MySQL
   mysql:
     image: mysql:8.0
-    container_name: mysql
+    container_name: auth_mysql
     ports:
       - "3306:3306"
     environment:
       - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
       - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - TZ=Asia/Seoul
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./db:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD}"]
       interval: 10s
@@ -82,7 +82,6 @@ services:
       - auth_network
     restart: unless-stopped
 
-  # Redis
   redis:
     image: redis:7.2
     container_name: auth_redis
@@ -99,6 +98,25 @@ services:
     networks:
       - auth_network
     restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    expose:
+      - "9200"
+    networks:
+      - auth_network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.5.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    networks:
+      - auth_network
 
 volumes:
   mysql_data:

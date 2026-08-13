@@ -1,17 +1,28 @@
 const crypto = require('crypto');
-const { db, redisClient } = require('../../config/db');
-const { storeChallenge } = require('./challenge'); // ← 상단으로 이동
+const { db } = require('../../config/db');
+const { storeChallenge } = require('./challenge');
+
 const rpId = process.env.RP_ID || 'localhost';
 
-exports.generateRegistrationOptions = async (username, displayName) => {
 
-  const { challengeId, challengeValue } = await storeChallenge(username);
+// ============================================================
+// 등록 Challenge 생성
+// ============================================================
 
-  const userId = crypto.randomBytes(8).toString('base64url');
+exports.generateRegistrationOptions = async (
+    username,
+    displayName
+) => {
 
-  
+  const {
+    challengeId,
+    challengeValue
+  } = await storeChallenge(username);
 
-  return { 
+  const userId =
+      crypto.randomBytes(8).toString('base64url');
+
+  return {
     challenge: challengeValue,
     challengeId,
     userId,
@@ -19,31 +30,56 @@ exports.generateRegistrationOptions = async (username, displayName) => {
   };
 };
 
-exports.generateLoginOptions = async (username) => {
 
-  const storeResult = await storeChallenge(username);
-  console.log('storeChallenge 반환값:', storeResult);
+// ============================================================
+// 로그인 Challenge 생성
+// ============================================================
 
-  const { challengeId, challengeValue } = await storeChallenge(username);
-  console.log('challengeId:', challengeId);            // ← 추가
-  console.log('challengeValue:', challengeValue);
+exports.generateLoginOptions = async (
+    username
+) => {
 
-  const [rows] = await db.query(
-    `SELECT p.credential_id FROM passkeys p
-     JOIN users u ON p.user_id = u.id
-     WHERE u.username = ?
-     AND p.is_active = 1`,
-    [username]
+  // 로그인 시작 1회당 Challenge 1개만 생성
+  const {
+    challengeId,
+    challengeValue
+  } = await storeChallenge(username);
+
+  console.log(
+      'challengeId:',
+      challengeId
   );
 
-  const allowCredentials = rows.map(row => ({
-    id: row.credential_id,
-    type: 'public-key',
-  }));
+  console.log(
+      'challengeValue:',
+      challengeValue
+  );
 
-  console.log('반환할 challengeId:', challengeId);
+  const [rows] = await db.query(
+      `
+      SELECT
+        p.credential_id
+      FROM passkeys p
+      JOIN users u
+        ON p.user_id = u.id
+      WHERE u.username = ?
+        AND p.is_active = 1
+    `,
+      [username]
+  );
 
-  return { 
+  const allowCredentials =
+      rows.map(row => ({
+        id: row.credential_id,
+        type: 'public-key',
+      }));
+
+  console.log(
+      '반환할 challengeId:',
+      challengeId
+  );
+
+  return {
     challenge: challengeValue,
     challengeId,
     rpId,

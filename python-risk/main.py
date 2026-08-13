@@ -21,7 +21,7 @@ app = FastAPI(
         "Rule 기반 Risk Score와 Isolation Forest 이상 탐지를 이용해 "
         "로그인 위험도를 분석하고 ML 학습 Feature를 저장합니다."
     ),
-    version="1.4.0",
+    version="1.5.0",
 )
 
 
@@ -97,6 +97,13 @@ class LogData(BaseModel):
         min_length=2,
     )
 
+    # 현재 로그인 지역 자체
+    # regionChanged는 이전 로그인 지역과 달라졌는지 여부
+    loginRegion: str = Field(
+        default="KR",
+        min_length=2,
+    )
+
     loginFrequency: int = Field(
         default=0,
         ge=0,
@@ -114,6 +121,10 @@ class LogData(BaseModel):
     isNewDevice: bool = False
 
     regionChanged: bool = False
+
+    # WebAuthn authenticator signCount 이상 여부
+    # 현재는 수집/저장용이며 기존 ML 9 Feature에는 미포함
+    signCountAbnormal: bool = False
 
     challengeResponseTime: Optional[float] = Field(
         default=None,
@@ -195,18 +206,22 @@ def save_ml_feature_log(
             INSERT INTO ml_feature_logs (
                 user_id_hash,
                 ip_hash,
+                login_region,
                 login_frequency,
                 failed_login_count,
                 ip_changed,
                 user_agent_changed,
                 is_new_device,
                 region_changed,
+                sign_count_abnormal,
                 challenge_response_time,
                 login_hour,
                 day_of_week,
                 data_source
             )
             VALUES (
+                %s,
+                %s,
                 %s,
                 %s,
                 %s,
@@ -225,12 +240,14 @@ def save_ml_feature_log(
         values = (
             data.userIdHash,
             data.ipHash,
+            data.loginRegion,
             data.loginFrequency,
             data.failedLoginCount,
             int(data.ipChanged),
             int(data.userAgentChanged),
             int(data.isNewDevice),
             int(data.regionChanged),
+            int(data.signCountAbnormal),
             data.challengeResponseTime,
             data.loginHour,
             data.dayOfWeek,
@@ -286,11 +303,9 @@ def run_ml_analysis(
             "ml_is_anomaly": None,
         }
 
-
     model_type = metadata.get(
         "model_type"
     )
-
 
     # --------------------------------------------------------
     # SYNTHETIC 모델은 실제 로그인 판정 금지
@@ -310,11 +325,12 @@ def run_ml_analysis(
             "ml_is_anomaly": None,
         }
 
-
     # --------------------------------------------------------
     # 모델 입력 Feature
     # --------------------------------------------------------
 
+    # loginRegion과 signCountAbnormal은 현재 수집/저장 대상.
+    # 기존 9-feature Isolation Forest에는 아직 포함하지 않는다.
     features = {
         "loginFrequency":
             data.loginFrequency,
@@ -348,7 +364,6 @@ def run_ml_analysis(
             data.dayOfWeek,
     }
 
-
     try:
 
         result = predict_anomaly_score(
@@ -369,7 +384,6 @@ def run_ml_analysis(
             "ml_is_anomaly": None,
         }
 
-
     if result is None:
 
         print(
@@ -382,7 +396,6 @@ def run_ml_analysis(
             "ml_anomaly_score": None,
             "ml_is_anomaly": None,
         }
-
 
     print(
         "ML 추론 성공:",
@@ -397,7 +410,6 @@ def run_ml_analysis(
                 result["is_anomaly"],
         }
     )
-
 
     return {
         "ml_model_used": True,
@@ -443,6 +455,9 @@ def save_risk_log(
         "country":
             data.country,
 
+        "loginRegion":
+            data.loginRegion,
+
         "loginFrequency":
             data.loginFrequency,
 
@@ -460,6 +475,9 @@ def save_risk_log(
 
         "regionChanged":
             data.regionChanged,
+
+        "signCountAbnormal":
+            data.signCountAbnormal,
 
         "challengeResponseTime":
             data.challengeResponseTime,
@@ -499,7 +517,6 @@ def save_risk_log(
             risk_response.ml_is_anomaly,
     }
 
-
     # --------------------------------------------------------
     # JSONL
     # --------------------------------------------------------
@@ -525,7 +542,6 @@ def save_risk_log(
             "Python 로컬 로그 저장 실패:",
             error,
         )
-
 
     # --------------------------------------------------------
     # Elasticsearch
@@ -681,7 +697,6 @@ def calculate_risk(
 
     feature_scores: Dict[str, int] = {}
 
-
     # --------------------------------------------------------
     # 1. 로그인 빈도
     # --------------------------------------------------------
@@ -703,7 +718,6 @@ def calculate_risk(
         feature_scores[
             "loginFrequency"
         ] = login_frequency_score
-
 
     # --------------------------------------------------------
     # 2. 로그인 실패 횟수
@@ -727,7 +741,6 @@ def calculate_risk(
             "failedLoginCount"
         ] = login_failure_score
 
-
     # --------------------------------------------------------
     # 3. IP 변경
     # --------------------------------------------------------
@@ -745,7 +758,6 @@ def calculate_risk(
         feature_scores[
             "ipChanged"
         ] = ip_score
-
 
     # --------------------------------------------------------
     # 4. User-Agent 변경
@@ -765,7 +777,6 @@ def calculate_risk(
             "userAgentChanged"
         ] = user_agent_score
 
-
     # --------------------------------------------------------
     # 5. 신규 기기
     # --------------------------------------------------------
@@ -783,7 +794,6 @@ def calculate_risk(
         feature_scores[
             "isNewDevice"
         ] = device_score
-
 
     # --------------------------------------------------------
     # 6. 접속 지역 변경
@@ -803,7 +813,6 @@ def calculate_risk(
             "regionChanged"
         ] = region_score
 
-
     # --------------------------------------------------------
     # 7. 해외 접속
     # --------------------------------------------------------
@@ -821,7 +830,6 @@ def calculate_risk(
         feature_scores[
             "foreignCountry"
         ] = country_score
-
 
     # --------------------------------------------------------
     # 8. Challenge 응답시간
@@ -845,7 +853,6 @@ def calculate_risk(
             "challengeResponseTime"
         ] = response_time_score
 
-
     # --------------------------------------------------------
     # 9. 새벽 로그인
     # --------------------------------------------------------
@@ -864,6 +871,16 @@ def calculate_risk(
             "loginHour"
         ] = odd_hour_score
 
+    # --------------------------------------------------------
+    # signCountAbnormal
+    # --------------------------------------------------------
+    #
+    # 현재는 수집/저장만 수행한다.
+    #
+    # signCount 이상은 Node verificationService 단계에서
+    # Passkey 비활성화 + 로그인 차단이 먼저 수행되므로
+    # 여기서 별도 Risk 점수를 부여하지 않는다.
+    #
 
     # --------------------------------------------------------
     # Rule 점수 제한
@@ -877,7 +894,6 @@ def calculate_risk(
         ),
     )
 
-
     # ========================================================
     # Isolation Forest ML 추론
     # ========================================================
@@ -885,7 +901,6 @@ def calculate_risk(
     ml_result = run_ml_analysis(
         data
     )
-
 
     # --------------------------------------------------------
     # REAL 모델 + 이상치인 경우에만 ML 보정점수 적용
@@ -914,7 +929,6 @@ def calculate_risk(
             "mlAnomaly"
         ] = ml_risk_score
 
-
     # --------------------------------------------------------
     # 인증 정책
     # --------------------------------------------------------
@@ -927,13 +941,11 @@ def calculate_risk(
         score
     )
 
-
     if not triggers:
 
         triggers.append(
             "NO_RISK_DETECTED"
         )
-
 
     # --------------------------------------------------------
     # Response
@@ -989,7 +1001,6 @@ def calculate_risk(
             ],
     )
 
-
     # --------------------------------------------------------
     # REAL 학습 Feature 저장
     # --------------------------------------------------------
@@ -997,7 +1008,6 @@ def calculate_risk(
     save_ml_feature_log(
         data
     )
-
 
     # --------------------------------------------------------
     # Risk 로그 저장
@@ -1007,6 +1017,5 @@ def calculate_risk(
         data,
         risk_response,
     )
-
 
     return risk_response

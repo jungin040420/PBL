@@ -135,13 +135,14 @@ exports.loginFinish = async (req, res) => {
     if (!result.verified) {
       await db.query(
         `INSERT INTO access_logs 
-        (username, ip, auth_result, reason)
+        (user_id, ip, auth_result, reason)
         VALUES (?, ?, 'fail', ?)`,
         [username, context.ip || 'unknown', result.reason || 'VERIFICATION_FAILED']
       );
+
       await redisClient.incr(`login:fail:${username}`);
       await redisClient.expire(`login:fail:${username}`, 3600);
-      
+
       try {
         await sendRiskData(username, context);
       } catch (riskError) {
@@ -151,31 +152,25 @@ exports.loginFinish = async (req, res) => {
       return res.status(401).json({ error: '로그인 검증 실패', reason: result.reason });
     }
 
-    //실패 횟수 조회
-    const failedLoginCount = parseInt(
-      await redisClient.get(`login:fail:${username}`)
-    ) || 0;
+        const failedLoginCount = parseInt(await redisClient.get(`login:fail:${username}`)) || 0;
     context.failedLoginCount = failedLoginCount;
     await redisClient.del(`login:fail:${username}`);
 
-    // 기기 변경 여부 확인
     const [rows] = await db.query(
-    'SELECT last_device, last_ip, last_user_agent, last_country FROM users WHERE username = ?',
-    [username]
+      'SELECT last_device, last_ip, last_user_agent, last_country FROM users WHERE username = ?',
+      [username]
     );
-    
+
     context.deviceChanged = rows[0]?.last_device !== context.userAgent;
     context.ipChanged = rows[0]?.last_ip !== context.ip;
     context.userAgentChanged = rows[0]?.last_user_agent !== context.userAgent;
     context.locationChanged = rows[0]?.last_country !== context.country;
 
-    // 현재 기기 정보 업데이트
     await db.query(
-    'UPDATE users SET last_device = ?, last_ip = ?, last_user_agent=?, last_country = ? WHERE username = ?',
-    [context.userAgent, context.ip, context.userAgent, context.country, username]
+      'UPDATE users SET last_device = ?, last_ip = ?, last_user_agent = ?, last_country = ? WHERE username = ?',
+      [context.userAgent, context.ip, context.userAgent, context.country, username]
     );
 
-    //로그인 빈도
     const loginFrequency = await redisClient.incr(`login:count:${username}`);
     await redisClient.expire(`login:count:${username}`, 3600);
     context.loginFrequency = loginFrequency;
@@ -188,40 +183,28 @@ exports.loginFinish = async (req, res) => {
       const riskResult = await sendRiskData(username, context);
       riskScore = riskResult.score;
       riskLevel = riskResult.level;
-       riskAction = riskResult.action;
+      riskAction = riskResult.action;
       console.log('리스크 스코어:', riskScore, riskLevel);
     } catch (error) {
       console.error('리스크 스코어 요청 실패:', error.message);
       console.error(error.stack);
     }
 
-    // **추후 코드 수정**
-    //   - 리스크 점수 높으면 추가 인증 요구 (Step-up MFA)
-    //   - JWT vs 서버 세션 방식 결정
-    //   - 세션 만료 시간 설정
-    //   - 로그인 성공 기록 저장 (대시보드 연동용)
-    const session = await sessionManager.createSession(
-      username, context.ip, context.userAgent
-    );
+    const session = await sessionManager.createSession(username, context.ip, context.userAgent);
     console.log('세션 생성 결과:', session);
-
-    // **추후 코드 수정**
-    //   - httpOnly, secure, sameSite 옵션 설정
-    //   - HTTPS 환경에서는 secure: true 필수
-    const ip = req.ip;
-    const userAgent = req.headers['user-agent'] || 'Unknown';
-    const time = new Date();
 
     const isNgrok = req.headers.host?.includes('ngrok');
 
     res.cookie('session', session.token, {
-      httpOnly: true,   // JS에서 접근 불가
-      secure: isNgrok ? true : false,    //운영환경에서는 반드시 true로 변경
+      httpOnly: true,
+      secure: isNgrok ? true : false,
       sameSite: isNgrok ? 'none' : 'lax',
-      maxAge: 1000 * 60 * 60, // 1시간
+      maxAge: 1000 * 60 * 60,
     });
 
-    return res.status(200).json({ success: true, message: '로그인 성공', 
+    return res.status(200).json({
+      success: true,
+      message: '로그인 성공',
       context: {
         deviceType: context.deviceInfo?.deviceType,
         os: context.deviceInfo?.os,
@@ -237,6 +220,7 @@ exports.loginFinish = async (req, res) => {
     return res.status(500).json({ error: '서버 오류' });
   }
 };
+
 
 //logout
 exports.logout = async (req, res) => {
