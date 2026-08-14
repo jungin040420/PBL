@@ -2,7 +2,7 @@
 -- ml_grants.sql
 -- ML 전용 DB 계정 생성 및 권한 부여
 --
--- 근거 문서 : F-08 v2.0 §1 접근통제 요건
+-- 근거 문서 : F-08 v2.1 §1 접근통제 요건
 --             "ml_feature_logs·ml_predictions 는 ML 서비스 전용 DB 계정만
 --              접근 가능하도록 권한 분리"
 --             F-07 v9.1 §5 ⑧ 「저장 위치 및 계정」
@@ -30,9 +30,7 @@ CREATE USER IF NOT EXISTS 'ml_reader'@'%' IDENTIFIED BY '<ML_READER_PASSWORD>';
 -- ---------------------------------------------------------------------
 -- 2. ml_writer — 적재 전용 (INSERT only)
 --
---    사용 주체 : 피처 로그를 적재하는 서비스
---                (Node 직접 적재 / ML 서비스 경유 여부는 안건 14에서 확정 예정.
---                 어느 쪽이든 권한 범위는 동일하므로 본 파일은 변경 불필요)
+--    사용 주체 : python-risk/main.py (FastAPI). Node → FastAPI → ml_db 경로로 적재.
 --
 --    SELECT 를 주지 않는 이유 : 적재 주체가 누적 학습 데이터를 읽을 수
 --    없어야 최소권한이 성립한다. UPDATE/DELETE 를 주지 않는 이유 :
