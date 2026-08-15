@@ -107,16 +107,22 @@ exports.verifyLogin = async (username, challengeId, credential) => {
   const [rows] = await db.query(
     `SELECT p.* FROM passkeys p
      JOIN users u ON p.user_id = u.id
-     WHERE u.username = ? AND p.credential_id = ?
-     AND p.is_active = 1`,
+     WHERE u.username = ? AND p.credential_id = ?`,
     [username, credential.id]
   );
 
-  if (rows.length === 0) {
-    return { verified: false };
+  const credentialMismatch = rows.length===0;
+
+  if(credentialMismatch) {
+    return {verified: false, reason: 'CREDENTIAL_MISMATCH', credentialMismatch: true, signCountAbnormal: false};
   }
 
   const passkey = rows[0];
+
+  if (passkey.is_active !== 1) {
+    return { verified: false, reason: 'PASSKEY_INACTIVE', credentialMismatch: false, signCountAbnormal: false };
+  }
+
   const expectedOrigin = process.env.ORIGIN || `http://${rpID}:3000`;
 
   let verification;
@@ -140,14 +146,15 @@ exports.verifyLogin = async (username, challengeId, credential) => {
   }
 
   if (!verification.verified) {
-    return { verified: false };
+    return { verified: false, credentialMismatch: false, signCountAbnormal: false };
   }
 
   const { authenticationInfo } = verification;
   const { newCounter } = authenticationInfo;
 
-  // ⚠️ 직접 구현 권장 - signCount 이상 탐지
-  if (passkey.counter > 0 && newCounter <= passkey.counter) {
+  const signCountAbnormal = passkey.counter > 0 && newCounter <= passkey.counter;
+
+  if (signCountAbnormal) {
     console.error('signCount 이상 탐지:', {
       username,
       expectedCounter: passkey.counter + 1,
@@ -155,12 +162,12 @@ exports.verifyLogin = async (username, challengeId, credential) => {
       time: new Date().toISOString(),
     });
 
-    await db.query(
-      'UPDATE passkeys SET is_active = 0 WHERE id = ?',
-      [passkey.id]
-    );
-
-    throw new Error('비정상적인 인증 시도 감지');
+    return { 
+      verified: false, 
+      reason: 'SIGN_COUNT_ABNORMAL',
+      credentialMismatch: false,
+      signCountAbnormal: true 
+    };
   }
 
   await db.query(
@@ -168,5 +175,5 @@ exports.verifyLogin = async (username, challengeId, credential) => {
     [newCounter, passkey.id]
   );
 
-  return { verified: true };
+  return { verified: true, credentialMismatch:false, signCountAbnormal: false };
 };

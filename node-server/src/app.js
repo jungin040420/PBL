@@ -33,7 +33,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(clientPath, 'login.html'));
 });
 
-// 로그인 페이지 명시적 라우팅
+// 로그인 페이지
 app.get('/login.html', (req, res) => {
   res.sendFile(path.join(clientPath, 'login.html'));
 });
@@ -43,16 +43,25 @@ app.get('/register.html', (req, res) => {
   res.sendFile(path.join(clientPath, 'register.html'));
 });
 
-// 라우터 연결
+// 인증 Rate Limit
 app.use('/auth', authLimiter);
-app.use('/auth', require('../routes/authRoutes'));
+
+// 인증 라우터
+app.use(
+    '/auth',
+    require('../routes/authRoutes')
+);
 
 // 세션 확인
-app.get('/api/me', authMiddleware, (req, res) => {
-  res.json({
-    message: '세션 유효',
-    username: req.username
-  });
-});
+app.get(
+    '/api/me',
+    authMiddleware,
+    (req, res) => {
+      res.json({
+        message: '세션 유효',
+        username: req.username
+      });
+    }
+);
 
 module.exports = app;

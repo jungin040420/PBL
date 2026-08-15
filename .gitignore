@@ -29,6 +29,7 @@ node-server/.env.dev
 .env
 .env.*
 !.env.example
+python-risk/risk_logs.jsonl
 
 # IntelliJ
 .idea/

@@ -3,7 +3,7 @@
 -- ML 학습용 피처 로그 저장소 스키마
 --
 -- 근거 문서 : F-07 v9.1 §5 ⑧ (테이블·컬럼 정의)
---             F-08 v2.0 §1   (접근통제 3요건 / 등급 분류)
+--             F-08 v2.1 §1   (접근통제 3요건 / 등급 분류)
 --             F-09 v2.0 §3   (보존기간·파기)
 -- 담당자     : 윤정인
 -- 작성일     : 2026.07.29
@@ -34,7 +34,7 @@ USE ml_db;
 --    쓰기 시점 : 로그인 이벤트 발생 즉시 1회 INSERT. 이후 갱신 없음.
 --    컬럼 기준 : F-07 v9.1 「ml_feature_logs 컬럼 정의」표
 --
---    NULL 정책 : F-08 v2.0 「ML 사용 여부」가 '채택' 으로 갱신된 항목만
+--    NULL 정책 : F-08 v2.1 「ML 사용 여부」가 '채택' 으로 갱신된 항목만
 --                실제 INSERT 대상이며, 나머지 컬럼은 스키마상 보존하되
 --                NULL 을 허용한다. (F-07 v9.1 컬럼 정의표 단서 조항)
 --
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS ml_feature_logs (
 
   -- [C] Context
   login_hour                    TINYINT      NULL
-    COMMENT '0~23. 비정상 시간대 탐지. 3등급 (타임존 기준 F-08 §1 확정 후 반영)',
+    COMMENT '0~23. 비정상 시간대 탐지. KST 기준(F-07 v9.1 §5 ⑧). 3등급',
   day_of_week                   TINYINT      NULL
     COMMENT '0~6. 요일 패턴 학습. 3등급',
   login_region                  INT          NULL
