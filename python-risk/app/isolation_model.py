@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 import joblib
@@ -9,17 +10,21 @@ from sklearn.ensemble import IsolationForest
 
 BASE_DIR = os.path.dirname(__file__)
 
+MODEL_DIR = os.path.abspath(
+    os.path.join(
+        BASE_DIR,
+        "..",
+        "model",
+    )
+)
+
 MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "..",
-    "model",
+    MODEL_DIR,
     "isolation_forest.joblib",
 )
 
 MODEL_META_PATH = os.path.join(
-    BASE_DIR,
-    "..",
-    "model",
+    MODEL_DIR,
     "isolation_forest_meta.json",
 )
 
@@ -34,35 +39,38 @@ FEATURE_ORDER = [
     "challengeResponseTime",
     "loginHour",
     "dayOfWeek",
+    "hasPreviousContext",
 ]
 
 
 def build_feature_vector(
     features: dict,
 ) -> np.ndarray:
+
     row = [
-        float(
-            features.get(
-                key,
-                0,
-            )
-        )
+        float(features.get(key, 0))
         for key in FEATURE_ORDER
     ]
 
     return np.array(
-        row,
+        [row],
         dtype=float,
-    ).reshape(1, -1)
+    )
 
 
 def train(
     feature_matrix: np.ndarray,
     contamination: float = 0.05,
 ) -> IsolationForest:
+
+    feature_matrix = np.asarray(
+        feature_matrix,
+        dtype=float,
+    )
+
     if feature_matrix.ndim != 2:
         raise ValueError(
-            "feature_matrix는 2차원 배열이어야 합니다."
+            "학습 데이터는 2차원 Matrix여야 합니다."
         )
 
     if feature_matrix.shape[1] != len(
@@ -73,74 +81,74 @@ def train(
         )
 
     model = IsolationForest(
-        n_estimators=100,
+        n_estimators=200,
         contamination=contamination,
         random_state=42,
         n_jobs=-1,
     )
 
-    model.fit(
-        feature_matrix
-    )
+    model.fit(feature_matrix)
 
     return model
 
 
 def save(
     model: IsolationForest,
-    path: str = MODEL_PATH,
 ) -> None:
+
     os.makedirs(
-        os.path.dirname(path),
+        MODEL_DIR,
         exist_ok=True,
     )
 
     joblib.dump(
         model,
-        path,
+        MODEL_PATH,
     )
+
+
+def load() -> Optional[IsolationForest]:
+
+    if not os.path.exists(MODEL_PATH):
+        return None
+
+    try:
+        return joblib.load(
+            MODEL_PATH
+        )
+
+    except Exception as error:
+        print(
+            "Isolation Forest 모델 로드 실패:",
+            error,
+        )
+        return None
 
 
 def save_metadata(
     model_type: str,
     training_rows: int,
     contamination: float,
-    path: str = MODEL_META_PATH,
 ) -> None:
-    """
-    model_type:
-        REAL
-        SYNTHETIC
-    """
-
-    model_type = model_type.upper()
-
-    if model_type not in {
-        "REAL",
-        "SYNTHETIC",
-    }:
-        raise ValueError(
-            "model_type은 REAL 또는 SYNTHETIC이어야 합니다."
-        )
-
-    metadata = {
-        "model_type": model_type,
-        "training_rows": int(
-            training_rows
-        ),
-        "contamination": float(
-            contamination
-        ),
-        "feature_order": FEATURE_ORDER,
-    }
 
     os.makedirs(
-        os.path.dirname(path),
+        MODEL_DIR,
         exist_ok=True,
     )
 
+    metadata = {
+        "model_type": model_type,
+        "training_rows": int(training_rows),
+        "contamination": float(contamination),
+        "feature_count": len(FEATURE_ORDER),
+        "feature_order": FEATURE_ORDER,
+        "trained_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
     with open(
-        path,
+        MODEL_META_PATH,
         "w",
         encoding="utf-8",
     ) as file:
@@ -152,137 +160,102 @@ def save_metadata(
         )
 
 
-def load(
-    path: str = MODEL_PATH,
-) -> Optional[IsolationForest]:
-    if not os.path.exists(path):
-        return None
+def load_metadata() -> Optional[dict]:
 
-    try:
-        return joblib.load(
-            path
-        )
-
-    except Exception as error:
-        print(
-            "Isolation Forest 모델 로드 실패:",
-            error,
-        )
-
-        return None
-
-
-def load_metadata(
-    path: str = MODEL_META_PATH,
-) -> Optional[dict]:
-    if not os.path.exists(path):
+    if not os.path.exists(
+        MODEL_META_PATH
+    ):
         return None
 
     try:
         with open(
-            path,
+            MODEL_META_PATH,
             "r",
             encoding="utf-8",
         ) as file:
-            metadata = json.load(
-                file
-            )
-
-        return metadata
+            return json.load(file)
 
     except (
         OSError,
         json.JSONDecodeError,
     ) as error:
+
         print(
-            "Isolation Forest 메타데이터 로드 실패:",
+            "Isolation Forest metadata 로드 실패:",
             error,
         )
 
         return None
 
 
-def is_real_model() -> bool:
-    metadata = load_metadata()
+def validate_metadata(
+    metadata: Optional[dict],
+) -> None:
 
     if not metadata:
-        return False
+        return
 
-    return (
-        metadata.get(
-            "model_type"
+    if (
+        metadata.get("feature_order") is not None
+        and
+        metadata.get("feature_order")
+        != FEATURE_ORDER
+    ):
+        raise ValueError(
+            "저장된 모델 Feature 순서와 "
+            "현재 FEATURE_ORDER가 일치하지 않습니다. "
+            "모델을 다시 학습해야 합니다."
         )
-        == "REAL"
-    )
+
+    if (
+        metadata.get("feature_count") is not None
+        and
+        int(metadata.get("feature_count"))
+        != len(FEATURE_ORDER)
+    ):
+        raise ValueError(
+            "저장된 모델 Feature 개수와 "
+            "현재 FEATURE_ORDER가 일치하지 않습니다. "
+            "모델을 다시 학습해야 합니다."
+        )
 
 
 def predict_anomaly_score(
     features: dict,
-    model: Optional[
-        IsolationForest
-    ] = None,
 ) -> Optional[dict]:
-    """
-    REAL 모델인 경우에만 실제 추론에 사용한다.
 
-    모델 파일이 없거나,
-    metadata가 없거나,
-    SYNTHETIC 모델이면 None 반환.
-    """
+    model = load()
+
+    if model is None:
+        print(
+            "Isolation Forest 모델 없음"
+        )
+        return None
 
     metadata = load_metadata()
 
-    if not metadata:
-        return None
+    validate_metadata(
+        metadata
+    )
 
-    if (
-        metadata.get(
-            "model_type"
-        )
-        != "REAL"
-    ):
-        return None
-
-    if (
-        metadata.get(
-            "feature_order"
-        )
-        != FEATURE_ORDER
-    ):
-        print(
-            "Isolation Forest Feature 순서 불일치"
-        )
-        return None
-
-    if model is None:
-        model = load()
-
-    if model is None:
-        return None
-
-    vector = build_feature_vector(
+    feature_vector = build_feature_vector(
         features
     )
 
-    raw_score = float(
-        model.score_samples(
-            vector
-        )[0]
-    )
+    prediction = model.predict(
+        feature_vector
+    )[0]
 
-    prediction = int(
-        model.predict(
-            vector
-        )[0]
-    )
+    anomaly_score = model.score_samples(
+        feature_vector
+    )[0]
 
     return {
         "anomaly_score":
-            raw_score,
+            float(anomaly_score),
 
         "is_anomaly":
-            prediction == -1,
-
-        "model_type":
-            "REAL",
+            bool(
+                int(prediction) == -1
+            ),
     }

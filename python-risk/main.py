@@ -15,13 +15,17 @@ from app.isolation_model import (
 )
 
 
+# ============================================================
+# FastAPI
+# ============================================================
+
 app = FastAPI(
     title="Hybrid Risk Score API",
     description=(
         "Rule 기반 Risk Score와 Isolation Forest 이상 탐지를 이용해 "
         "로그인 위험도를 분석하고 ML 학습 Feature를 저장합니다."
     ),
-    version="1.5.0",
+    version="1.8.0",
 )
 
 
@@ -31,8 +35,10 @@ app = FastAPI(
 
 LOG_FILE = Path("risk_logs.jsonl")
 
-ELASTICSEARCH_URL = (
-    "http://localhost:9200/risk-logs/_doc"
+# Docker 내부에서는 localhost가 아니라 서비스명 사용
+ELASTICSEARCH_URL = os.getenv(
+    "ELASTICSEARCH_URL",
+    "http://elasticsearch:9200/risk-logs/_doc",
 )
 
 
@@ -40,30 +46,69 @@ ELASTICSEARCH_URL = (
 # MySQL 설정
 # ============================================================
 
+# ML 전용 환경변수 우선 사용
+# 없으면 기존 DB_* 환경변수 fallback
+#
+# Docker 내부:
+#   host = mysql
+#   port = 3306
+
 DB_HOST = os.getenv(
-    "DB_HOST",
-    "localhost",
+    "ML_DB_HOST",
+    os.getenv(
+        "DB_HOST",
+        "mysql",
+    ),
 )
 
 DB_PORT = int(
     os.getenv(
-        "DB_PORT",
-        "3307",
+        "ML_DB_PORT",
+        os.getenv(
+            "DB_PORT",
+            "3306",
+        ),
     )
 )
 
 DB_USER = os.getenv(
-    "DB_USER",
-    "authuser",
+    "ML_DB_USER",
+    os.getenv(
+        "DB_USER",
+        "authuser",
+    ),
 )
 
 DB_PASSWORD = os.getenv(
-    "DB_PASSWORD",
+    "ML_DB_PASSWORD",
+    os.getenv(
+        "DB_PASSWORD",
+    ),
 )
 
 DB_NAME = os.getenv(
-    "DB_NAME",
-    "mfa_db",
+    "ML_DB_NAME",
+    os.getenv(
+        "DB_NAME",
+        "ml_db",
+    ),
+)
+
+
+print(
+    "ML DB 설정:",
+    {
+        "host": DB_HOST,
+        "port": DB_PORT,
+        "user": DB_USER,
+        "database": DB_NAME,
+        "has_password": bool(DB_PASSWORD),
+    }
+)
+
+print(
+    "Elasticsearch 설정:",
+    ELASTICSEARCH_URL,
 )
 
 
@@ -80,6 +125,8 @@ class LogData(BaseModel):
         description="USERID_SALT 기반 SHA-256 사용자 식별자 해시",
     )
 
+    # IP 원문 저장 금지
+    # COMPARE_SALT 기반 비교용 해시
     ipHash: str = Field(
         ...,
         min_length=64,
@@ -97,8 +144,6 @@ class LogData(BaseModel):
         min_length=2,
     )
 
-    # 현재 로그인 지역 자체
-    # regionChanged는 이전 로그인 지역과 달라졌는지 여부
     loginRegion: str = Field(
         default="KR",
         min_length=2,
@@ -122,9 +167,11 @@ class LogData(BaseModel):
 
     regionChanged: bool = False
 
-    # WebAuthn authenticator signCount 이상 여부
-    # 현재는 수집/저장용이며 기존 ML 9 Feature에는 미포함
+    hasPreviousContext: bool = False
+
     signCountAbnormal: bool = False
+
+    credentialMismatch: bool = False
 
     challengeResponseTime: Optional[float] = Field(
         default=None,
@@ -151,18 +198,23 @@ class LogData(BaseModel):
 class RiskResponse(BaseModel):
 
     userIdHash: str
+
     ipHash: str
+
     deviceType: str
 
     risk_score: int
+
     risk_level: str
+
     authentication_action: str
+
     message: str
 
     triggers: List[str]
+
     feature_scores: Dict[str, int]
 
-    # ML 관련 결과
     ml_model_used: bool = False
 
     ml_model_type: Optional[str] = None
@@ -173,7 +225,20 @@ class RiskResponse(BaseModel):
 
 
 # ============================================================
-# ML Feature 로그 MySQL 저장
+# Event ID
+# ============================================================
+
+def generate_event_id() -> str:
+
+    return datetime.now(
+        timezone.utc
+    ).strftime(
+        "evt_%Y%m%d_%H%M%S%f"
+    )
+
+
+# ============================================================
+# MySQL REAL Feature 저장
 # ============================================================
 
 def save_ml_feature_log(
@@ -181,13 +246,17 @@ def save_ml_feature_log(
 ) -> None:
 
     if not DB_PASSWORD:
+
         print(
             "ML Feature MySQL 저장 건너뜀: "
-            "DB_PASSWORD 환경변수가 없습니다."
+            "ML_DB_PASSWORD 또는 DB_PASSWORD 환경변수가 없습니다."
         )
+
         return
 
     connection = None
+
+    event_id = generate_event_id()
 
     try:
 
@@ -198,14 +267,14 @@ def save_ml_feature_log(
             password=DB_PASSWORD,
             database=DB_NAME,
             charset="utf8mb4",
-            connect_timeout=3,
+            connect_timeout=5,
             autocommit=True,
         )
 
         sql = """
             INSERT INTO ml_feature_logs (
+                event_id,
                 user_id_hash,
-                ip_hash,
                 login_region,
                 login_frequency,
                 failed_login_count,
@@ -213,7 +282,9 @@ def save_ml_feature_log(
                 user_agent_changed,
                 is_new_device,
                 region_changed,
+                has_previous_context,
                 sign_count_abnormal,
+                credential_mismatch,
                 challenge_response_time,
                 login_hour,
                 day_of_week,
@@ -233,13 +304,15 @@ def save_ml_feature_log(
                 %s,
                 %s,
                 %s,
+                %s,
+                %s,
                 'REAL'
             )
         """
 
         values = (
+            event_id,
             data.userIdHash,
-            data.ipHash,
             data.loginRegion,
             data.loginFrequency,
             data.failedLoginCount,
@@ -247,20 +320,24 @@ def save_ml_feature_log(
             int(data.userAgentChanged),
             int(data.isNewDevice),
             int(data.regionChanged),
+            int(data.hasPreviousContext),
             int(data.signCountAbnormal),
+            int(data.credentialMismatch),
             data.challengeResponseTime,
             data.loginHour,
             data.dayOfWeek,
         )
 
         with connection.cursor() as cursor:
+
             cursor.execute(
                 sql,
                 values,
             )
 
         print(
-            "ML Feature MySQL 저장 성공 [REAL]"
+            f"ML Feature MySQL 저장 성공 [REAL] "
+            f"event_id={event_id}"
         )
 
     except pymysql.MySQLError as error:
@@ -270,9 +347,21 @@ def save_ml_feature_log(
             error,
         )
 
+        print(
+            "ML DB 접속 설정:",
+            {
+                "host": DB_HOST,
+                "port": DB_PORT,
+                "user": DB_USER,
+                "database": DB_NAME,
+                "has_password": bool(DB_PASSWORD),
+            }
+        )
+
     finally:
 
         if connection is not None:
+
             connection.close()
 
 
@@ -284,11 +373,23 @@ def run_ml_analysis(
     data: LogData,
 ) -> dict:
 
-    metadata = load_metadata()
+    try:
 
-    # --------------------------------------------------------
-    # 모델 metadata 자체가 없는 경우
-    # --------------------------------------------------------
+        metadata = load_metadata()
+
+    except Exception as error:
+
+        print(
+            "ML metadata 로드 실패:",
+            error,
+        )
+
+        return {
+            "ml_model_used": False,
+            "ml_model_type": None,
+            "ml_anomaly_score": None,
+            "ml_is_anomaly": None,
+        }
 
     if not metadata:
 
@@ -307,10 +408,7 @@ def run_ml_analysis(
         "model_type"
     )
 
-    # --------------------------------------------------------
-    # SYNTHETIC 모델은 실제 로그인 판정 금지
-    # --------------------------------------------------------
-
+    # SYNTHETIC 모델은 실제 로그인 판정에 사용하지 않는다.
     if model_type != "REAL":
 
         print(
@@ -325,13 +423,8 @@ def run_ml_analysis(
             "ml_is_anomaly": None,
         }
 
-    # --------------------------------------------------------
-    # 모델 입력 Feature
-    # --------------------------------------------------------
-
-    # loginRegion과 signCountAbnormal은 현재 수집/저장 대상.
-    # 기존 9-feature Isolation Forest에는 아직 포함하지 않는다.
     features = {
+
         "loginFrequency":
             data.loginFrequency,
 
@@ -362,6 +455,9 @@ def run_ml_analysis(
 
         "dayOfWeek":
             data.dayOfWeek,
+
+        "hasPreviousContext":
+            data.hasPreviousContext,
     }
 
     try:
@@ -412,10 +508,15 @@ def run_ml_analysis(
     )
 
     return {
-        "ml_model_used": True,
-        "ml_model_type": model_type,
+        "ml_model_used":
+            True,
+
+        "ml_model_type":
+            model_type,
+
         "ml_anomaly_score":
             result["anomaly_score"],
+
         "ml_is_anomaly":
             result["is_anomaly"],
     }
@@ -476,8 +577,14 @@ def save_risk_log(
         "regionChanged":
             data.regionChanged,
 
+        "hasPreviousContext":
+            data.hasPreviousContext,
+
         "signCountAbnormal":
             data.signCountAbnormal,
+
+        "credentialMismatch":
+            data.credentialMismatch,
 
         "challengeResponseTime":
             data.challengeResponseTime,
@@ -503,7 +610,6 @@ def save_risk_log(
         "feature_scores":
             risk_response.feature_scores,
 
-        # ML 결과
         "ml_model_used":
             risk_response.ml_model_used,
 
@@ -518,7 +624,7 @@ def save_risk_log(
     }
 
     # --------------------------------------------------------
-    # JSONL
+    # 로컬 JSONL 저장
     # --------------------------------------------------------
 
     try:
@@ -536,6 +642,10 @@ def save_risk_log(
                 + "\n"
             )
 
+        print(
+            "Python 로컬 Risk 로그 저장 성공"
+        )
+
     except OSError as error:
 
         print(
@@ -544,7 +654,7 @@ def save_risk_log(
         )
 
     # --------------------------------------------------------
-    # Elasticsearch
+    # Elasticsearch 저장
     # --------------------------------------------------------
 
     try:
@@ -576,9 +686,16 @@ def save_risk_log(
 @app.get("/")
 def read_root():
 
-    metadata = load_metadata()
+    try:
+
+        metadata = load_metadata()
+
+    except Exception:
+
+        metadata = None
 
     return {
+
         "status":
             "Python 리스크 서버 실행 중",
 
@@ -593,15 +710,29 @@ def read_root():
 
         "ml_model_type":
             (
-                metadata.get("model_type")
+                metadata.get(
+                    "model_type"
+                )
                 if metadata
                 else None
             ),
+
+        "db":
+            {
+                "host": DB_HOST,
+                "port": DB_PORT,
+                "database": DB_NAME,
+                "password_configured":
+                    bool(DB_PASSWORD),
+            },
+
+        "elasticsearch":
+            ELASTICSEARCH_URL,
     }
 
 
 # ============================================================
-# Rule Score 함수
+# Rule Score
 # ============================================================
 
 def calculate_login_frequency_score(
@@ -609,12 +740,15 @@ def calculate_login_frequency_score(
 ) -> int:
 
     if login_frequency >= 10:
+
         return 15
 
     if login_frequency >= 5:
+
         return 10
 
     if login_frequency >= 3:
+
         return 5
 
     return 0
@@ -625,12 +759,15 @@ def calculate_login_failure_score(
 ) -> int:
 
     if login_failures >= 5:
+
         return 25
 
     if login_failures >= 3:
+
         return 15
 
     if login_failures >= 1:
+
         return 5
 
     return 0
@@ -641,12 +778,15 @@ def calculate_response_time_score(
 ) -> int:
 
     if challenge_response_time is None:
+
         return 0
 
     if 0 < challenge_response_time < 300:
+
         return 10
 
     if challenge_response_time > 5000:
+
         return 5
 
     return 0
@@ -697,9 +837,9 @@ def calculate_risk(
 
     feature_scores: Dict[str, int] = {}
 
-    # --------------------------------------------------------
+    # ========================================================
     # 1. 로그인 빈도
-    # --------------------------------------------------------
+    # ========================================================
 
     login_frequency_score = (
         calculate_login_frequency_score(
@@ -719,9 +859,10 @@ def calculate_risk(
             "loginFrequency"
         ] = login_frequency_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 2. 로그인 실패 횟수
-    # --------------------------------------------------------
+    # ========================================================
 
     login_failure_score = (
         calculate_login_failure_score(
@@ -741,9 +882,10 @@ def calculate_risk(
             "failedLoginCount"
         ] = login_failure_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 3. IP 변경
-    # --------------------------------------------------------
+    # ========================================================
 
     if data.ipChanged:
 
@@ -759,9 +901,10 @@ def calculate_risk(
             "ipChanged"
         ] = ip_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 4. User-Agent 변경
-    # --------------------------------------------------------
+    # ========================================================
 
     if data.userAgentChanged:
 
@@ -777,9 +920,10 @@ def calculate_risk(
             "userAgentChanged"
         ] = user_agent_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 5. 신규 기기
-    # --------------------------------------------------------
+    # ========================================================
 
     if data.isNewDevice:
 
@@ -795,9 +939,10 @@ def calculate_risk(
             "isNewDevice"
         ] = device_score
 
-    # --------------------------------------------------------
-    # 6. 접속 지역 변경
-    # --------------------------------------------------------
+
+    # ========================================================
+    # 6. 지역 변경
+    # ========================================================
 
     if data.regionChanged:
 
@@ -813,9 +958,10 @@ def calculate_risk(
             "regionChanged"
         ] = region_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 7. 해외 접속
-    # --------------------------------------------------------
+    # ========================================================
 
     if data.country.upper() != "KR":
 
@@ -831,9 +977,10 @@ def calculate_risk(
             "foreignCountry"
         ] = country_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 8. Challenge 응답시간
-    # --------------------------------------------------------
+    # ========================================================
 
     response_time_score = (
         calculate_response_time_score(
@@ -853,9 +1000,10 @@ def calculate_risk(
             "challengeResponseTime"
         ] = response_time_score
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # 9. 새벽 로그인
-    # --------------------------------------------------------
+    # ========================================================
 
     if 0 <= data.loginHour <= 5:
 
@@ -871,20 +1019,10 @@ def calculate_risk(
             "loginHour"
         ] = odd_hour_score
 
-    # --------------------------------------------------------
-    # signCountAbnormal
-    # --------------------------------------------------------
-    #
-    # 현재는 수집/저장만 수행한다.
-    #
-    # signCount 이상은 Node verificationService 단계에서
-    # Passkey 비활성화 + 로그인 차단이 먼저 수행되므로
-    # 여기서 별도 Risk 점수를 부여하지 않는다.
-    #
 
-    # --------------------------------------------------------
-    # Rule 점수 제한
-    # --------------------------------------------------------
+    # ========================================================
+    # Rule Score 제한
+    # ========================================================
 
     score = max(
         0,
@@ -894,17 +1032,14 @@ def calculate_risk(
         ),
     )
 
+
     # ========================================================
-    # Isolation Forest ML 추론
+    # Isolation Forest
     # ========================================================
 
     ml_result = run_ml_analysis(
         data
     )
-
-    # --------------------------------------------------------
-    # REAL 모델 + 이상치인 경우에만 ML 보정점수 적용
-    # --------------------------------------------------------
 
     if (
         ml_result["ml_model_used"]
@@ -929,9 +1064,10 @@ def calculate_risk(
             "mlAnomaly"
         ] = ml_risk_score
 
-    # --------------------------------------------------------
-    # 인증 정책
-    # --------------------------------------------------------
+
+    # ========================================================
+    # 최종 인증 정책
+    # ========================================================
 
     (
         risk_level,
@@ -947,9 +1083,10 @@ def calculate_risk(
             "NO_RISK_DETECTED"
         )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # Response
-    # --------------------------------------------------------
+    # ========================================================
 
     risk_response = RiskResponse(
 
@@ -1001,21 +1138,43 @@ def calculate_risk(
             ],
     )
 
-    # --------------------------------------------------------
-    # REAL 학습 Feature 저장
-    # --------------------------------------------------------
+
+    # ========================================================
+    # REAL Feature 저장
+    # ========================================================
 
     save_ml_feature_log(
         data
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # Risk 로그 저장
-    # --------------------------------------------------------
+    # ========================================================
 
     save_risk_log(
         data,
         risk_response,
+    )
+
+
+    print(
+        "Risk 분석 완료:",
+        {
+            "risk_score":
+                score,
+
+            "risk_level":
+                risk_level,
+
+            "action":
+                authentication_action,
+
+            "ml_model_used":
+                ml_result[
+                    "ml_model_used"
+                ],
+        }
     )
 
     return risk_response
