@@ -37,13 +37,13 @@ services:
       dockerfile: Dockerfile
     container_name: auth_python
     ports:
-      - "8000:8000"
+      - "5000:8000"
     environment:
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=${DB_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=ml_writer
+      - DB_PASSWORD=${ML_WRITER_PASSWORD}
+      - DB_NAME=ml_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - TZ=Asia/Seoul
@@ -57,10 +57,13 @@ services:
     networks:
       - auth_network
     restart: unless-stopped
-
+    
   mysql:
     image: mysql:8.0
     container_name: auth_mysql
+    env_file:
+      - ./node-server/.env.dev
+    command: --event-scheduler=ON
     ports:
       - "3306:3306"
     environment:
