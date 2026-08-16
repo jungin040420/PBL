@@ -25,6 +25,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PYTHON_RISK_URL=http://python:8000
+      - TZ=Asia/Seoul
     depends_on:
       mysql:
         condition: service_healthy
@@ -47,11 +48,6 @@ services:
     ports:
       - "5000:8000"
     environment:
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=authuser
-      - MYSQL_PASSWORD=authpass
-      - MYSQL_DATABASE=authdb
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=ml_writer
@@ -59,6 +55,7 @@ services:
       - DB_NAME=ml_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - TZ=Asia/Seoul             
     depends_on:
       mysql:
         condition: service_healthy
@@ -75,15 +72,19 @@ services:
     image: mysql:8.0
     container_name: auth_mysql
     env_file:
-      - ./node-server/.env.dev
+      - .env.dev
     command: --event-scheduler=ON
     ports:
       - "3306:3306"
     environment:
       - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
       - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=authuser
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - TZ=Asia/Seoul
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./db:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD}"]
       interval: 10s
@@ -98,6 +99,8 @@ services:
   redis:
     image: redis:7.2
     container_name: auth_redis
+    environment:
+      - TZ=Asia/Seoul
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
