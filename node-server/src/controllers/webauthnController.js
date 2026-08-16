@@ -6,7 +6,7 @@ const axios = require('axios');
 const {sendRiskData} = require('../services/riskService');
 const { redisClient } = require('../../config/db');
 const { db } = require('../../config/db');
-const { hashForCompare } = require('../utils/anonymize');
+const { hashForCompare, hashUserId } = require('../utils/anonymize');
 
 console.log('sendRiskData 타입:', typeof sendRiskData);
 
@@ -138,9 +138,9 @@ exports.loginFinish = async (req, res) => {
 
       await db.query(
         `INSERT INTO access_logs 
-        (user_id, ip_hash, auth_result, reason)
-        VALUES (?, ?, 'fail', ?)`,
-        [username, ipHash, result.reason || 'VERIFICATION_FAILED']
+        (user_id, auth_result, reason)
+        VALUES (?, 'fail', ?)`,
+        [username, result.reason || 'VERIFICATION_FAILED']
       );
 
       await redisClient.incr(`login:fail:${username}`);
@@ -155,11 +155,23 @@ exports.loginFinish = async (req, res) => {
       return res.status(401).json({ error: '로그인 검증 실패', reason: result.reason });
     }
 
+    // 사용자 존재 여부 확인
+    const [rows] = await db.query(
+      `SELECT id, username FROM users WHERE username = ? LIMIT 1`,
+      [username]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+    }
+
+    const user = rows[0];
+
     const failedLoginCount = parseInt(await redisClient.get(`login:fail:${username}`)) || 0;
     context.failedLoginCount = failedLoginCount;
     await redisClient.del(`login:fail:${username}`);
 
-    const userIdHash = hashForCompare(username);
+    const userIdHash = hashUserId(username);
     const contextKey = `lastcontext:${userIdHash}`;
     const prevContext = await redisClient.hGetAll(contextKey);
 
@@ -185,9 +197,9 @@ exports.loginFinish = async (req, res) => {
 
     await db.query(
       `INSERT INTO access_logs 
-      (user_id, ip_hash, auth_result, reason)
-      VALUES (?, ?, 'success', ?)`,
-      [username, currentIpHash, 'LOGIN_SUCCESS']
+      (user_id, auth_result, reason)
+      VALUES (?, 'success', ?)`,
+      [username, 'LOGIN_SUCCESS']
     );
 
     const loginFrequency = await redisClient.incr(`login:count:${username}`);
@@ -197,16 +209,57 @@ exports.loginFinish = async (req, res) => {
     let riskScore = 0;
     let riskLevel = 'Low';
     let riskAction = 'ACTIVE';
+    let riskMessage = '리스크 분석 서버 응답 없음';
+    let riskTriggers = [];
+    let riskFeatureScores = {};
+
+    //ML 결과
+    let mlModelUsed = false;
+    let mlModelType = null;
+    let mlAnomalyScore = null;
+    let mlIsAnomaly = null;
 
     try {
       const riskResult = await sendRiskData(username, context);
-      riskScore = riskResult.score;
-      riskLevel = riskResult.level;
-      riskAction = riskResult.action;
-      console.log('리스크 스코어:', riskScore, riskLevel);
+      riskScore = riskResult.score ?? 0;
+      riskLevel = riskResult.level ?? 'LOW';
+      riskAction = riskResult.action ?? 'ACTIVE';
+      riskMessage = riskResult.message ?? '리스크 분석 완료';
+      riskTriggers = riskResult.triggers ?? [];
+      riskFeatureScores = riskResult.featureScores ?? {};
+
+      mlModelUsed = riskResult.mlModelUsed ?? false;
+      mlModelType = riskResult.mlModelType ?? null;
+      mlAnomalyScore = riskResult.mlAnomalyScore ?? null;
+      mlIsAnomaly = riskResult.mlIsAnomaly ?? null;
+
+      console.log('리스크 스코어:', {riskScore, riskLevel, mlModelUsed, mlModelType, mlAnomalyScore, mlIsAnomaly});
     } catch (error) {
       console.error('리스크 스코어 요청 실패:', error.message);
       console.error(error.stack);
+    }
+
+    if (riskAction === 'BLOCKED') {
+      return res.status(403).json({
+        success: false,
+        message: riskMessage || '위험도가 높아 로그인이 차단되었습니다.',
+        riskScore, riskLevel, riskAction,
+        triggers: riskTriggers,
+        featureScores: riskFeatureScores,
+        ml: { modelUsed: mlModelUsed, modelType: mlModelType, anomalyScore: mlAnomalyScore, isAnomaly: mlIsAnomaly },
+      });
+    }
+
+    if (riskAction === 'RE_AUTH') {
+      return res.status(200).json({
+        success: false,
+        requiresReauthentication: true,
+        message: riskMessage || '추가 인증이 필요합니다.',
+        riskScore, riskLevel, riskAction,
+        triggers: riskTriggers,
+        featureScores: riskFeatureScores,
+        ml: { modelUsed: mlModelUsed, modelType: mlModelType, anomalyScore: mlAnomalyScore, isAnomaly: mlIsAnomaly },
+      });
     }
 
     const session = await sessionManager.createSession(username, context.ip, context.userAgent);
@@ -227,11 +280,17 @@ exports.loginFinish = async (req, res) => {
       context: {
         deviceType: context.deviceInfo?.deviceType,
         os: context.deviceInfo?.os,
-        isNightAccess: context.isNightAccess
+        isNightAccess: context.isNightAccess,
+        country: context.country,
+        signCountAbnormal: context.signCountAbnormal,
       },
       riskScore,
       riskLevel,
-      riskAction: riskAction
+      riskAction,
+      riskMessage,
+      triggers: riskTriggers,
+      featureScores: riskFeatureScores,
+      ml: { modelUsed: mlModelUsed, modelType: mlModelType, anomalyScore: mlAnomalyScore, isAnomaly: mlIsAnomaly },
     });
 
   } catch (error) {

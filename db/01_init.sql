@@ -10,10 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   username      VARCHAR(50)  NOT NULL UNIQUE,
   display_name  VARCHAR(100) NOT NULL,
   email         VARCHAR(100) NOT NULL UNIQUE,
-  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP,
-  last_device   VARCHAR(255),
-  last_ip       VARCHAR(45),
-  last_user_agent VARCHAR(255)
+  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS passkeys (
@@ -35,25 +32,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 세션 테이블(추후 코드 수정)
---  - mysql과의 연동
---  - 대시보드 연결
---  - 기기 정보
-CREATE TABLE IF NOT EXISTS sessions (
-  id            INT AUTO_INCREMENT PRIMARY KEY,
-  user_id       INT          NOT NULL,
-  session_token VARCHAR(500) NOT NULL UNIQUE,
-  ip_address    VARCHAR(50),   --  리스크 산출 파트 연동 시 필요
-  user_agent    TEXT,          --  리스크 산출 파트 연동 시 필요
-  created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP,
-  expires_at    DATETIME,      --  TTL 정책 결정 후 설정
-
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
+ 
 -- 연결 확인용 테스트 데이터 (나중에 삭제)
-INSERT INTO users (username, display_name, email)
+INSERT IGNORE INTO users (username, display_name, email)
 VALUES ('testuser', '테스트 유저', 'test@test.com');
 
 -- authdb
@@ -66,10 +47,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON authdb.* TO 'authuser'@'%';
 CREATE TABLE IF NOT EXISTS access_logs (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id     VARCHAR(64),
-    ip          VARCHAR(45)   NOT NULL, -- 추후 수정 필요
-    device      VARCHAR(255),
-    user_agent  TEXT,
-    location    VARCHAR(100),
+    -- device      VARCHAR(255),
+    -- user_agent  TEXT, 
+    -- location    VARCHAR(100), -> 필요한 건지 확인 후 수정
     auth_result ENUM('success','fail') NOT NULL,
     reason      VARCHAR(255),
     created_at  DATETIME      NOT NULL DEFAULT NOW()
@@ -97,7 +77,6 @@ CREATE TABLE IF NOT EXISTS unified_logs (
 );
 
 -- 인덱스
-CREATE INDEX idx_access_ip      ON access_logs(ip);
 CREATE INDEX idx_access_user    ON access_logs(user_id);
 CREATE INDEX idx_access_created ON access_logs(created_at);
 CREATE INDEX idx_risk_user      ON risk_scores(user_id);
