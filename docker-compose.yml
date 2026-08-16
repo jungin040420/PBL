@@ -45,13 +45,21 @@ services:
       dockerfile: Dockerfile
     container_name: auth_python
     ports:
-      - "8000:8000"
+      - "5000:8000"
     environment:
+<<<<<<< HEAD
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
       - MYSQL_PASSWORD=authpass
       - MYSQL_DATABASE=authdb
+=======
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=ml_writer
+      - DB_PASSWORD=${ML_WRITER_PASSWORD}
+      - DB_NAME=ml_db
+>>>>>>> 01f3783cbc8ef775b5bbb7ed494cdfe7cc9f6a45
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
@@ -64,11 +72,18 @@ services:
     networks:
       - auth_network
     restart: unless-stopped
+<<<<<<< HEAD
 
   # MySQL
+=======
+    
+>>>>>>> 01f3783cbc8ef775b5bbb7ed494cdfe7cc9f6a45
   mysql:
     image: mysql:8.0
     container_name: auth_mysql
+    env_file:
+      - ./node-server/.env.dev
+    command: --event-scheduler=ON
     ports:
       - "3306:3306"
     environment:
@@ -104,6 +119,30 @@ services:
       - auth_network
     restart: unless-stopped
 
+<<<<<<< HEAD
+=======
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    expose:
+      - "9200"
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.5.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+>>>>>>> 01f3783cbc8ef775b5bbb7ed494cdfe7cc9f6a45
 volumes:
   mysql_data:
   redis_data:
