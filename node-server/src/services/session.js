@@ -59,6 +59,14 @@ const updateSessionStatus = async (userId, sessionId, status) => {
   // TTL 유지하면서 값만 업데이트
   const remainingTTL = await redisClient.ttl(key);
 
+  if (remainingTTL === -2) {
+    return false;
+  }
+  if (remainingTTL === -1) {
+    console.warn(`세션에 TTL이 없는 비정상 상태 발견: ${key}`);
+    await redisClient.del(key);
+    return false;
+  }
   if (remainingTTL <= 0) {
     await redisClient.del(key);
     return false;
