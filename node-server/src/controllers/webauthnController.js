@@ -6,7 +6,9 @@ const axios = require('axios');
 const {sendRiskData} = require('../services/riskService');
 const { redisClient } = require('../../config/db');
 const { db } = require('../../config/db');
-const { hashForCompare, hashUserId } = require('../utils/anonymize');
+const { hashForCompare, hashUserId, anonymizeRandom } = require('../utils/anonymize');
+const { encryptObject } = require('../utils/crypto');
+const { hashUserId, hashForCompare } = require('../utils/anonymize');
 
 console.log('sendRiskData 타입:', typeof sendRiskData);
 
@@ -143,6 +145,25 @@ exports.loginFinish = async (req, res) => {
         [username, result.reason || 'VERIFICATION_FAILED']
       );
 
+      try {
+        await db.query(
+          'INSERT INTO mfa_db.audit_logs (event_type, payload) VALUES (?, ?)',
+          [
+            'LOGIN_FAIL',
+            encryptObject({
+              userIdHash: hashUserId(username),
+              ipHash: hashForCompare(context.ip || 'unknown'),
+              deviceType: context.deviceInfo?.deviceType || 'unknown',
+              result: 'fail',
+              reason: result.reason || 'VERIFICATION_FAILED',
+              timestamp: new Date().toISOString(),
+            }),
+          ]
+        );
+      } catch (auditError) {
+        console.error('[AUDIT_LOG_FAILURE] audit_logs 기록 실패(실패 이벤트):', auditError.message);
+      }
+
       await redisClient.incr(`login:fail:${username}`);
       await redisClient.expire(`login:fail:${username}`, 3600);
 
@@ -201,6 +222,24 @@ exports.loginFinish = async (req, res) => {
       VALUES (?, 'success', ?)`,
       [username, 'LOGIN_SUCCESS']
     );
+
+    try {
+      await db.query(
+        'INSERT INTO mfa_db.audit_logs (event_type, payload) VALUES (?, ?)',
+        [
+          'LOGIN_SUCCESS',
+          encryptObject({
+            userIdHash: hashUserId(username),
+            ipHash: currentIpHash,
+            deviceType: context.deviceInfo?.deviceType || 'unknown',
+            result: 'success',
+            timestamp: new Date().toISOString(),
+          }),
+        ]
+      );
+    } catch (auditError) {
+      console.error('[AUDIT_LOG_FAILURE] audit_logs 기록 실패:', auditError.message);
+    }
 
     const loginFrequency = await redisClient.incr(`login:count:${username}`);
     await redisClient.expire(`login:count:${username}`, 3600);
@@ -262,7 +301,7 @@ exports.loginFinish = async (req, res) => {
       });
     }
 
-    const session = await sessionManager.createSession(username, context.ip, context.userAgent);
+    const session = await sessionManager.createSession(username, anonymizeRandom(context.ip), anonymizeRandom(context.userAgent));
     console.log('세션 생성 결과:', session);
 
     const isNgrok = req.headers.host?.includes('ngrok');
