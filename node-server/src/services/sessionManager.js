@@ -1,27 +1,30 @@
-const { redisClient } = require('../../config/db'); 
-const {createSession,
+const { redisClient } = require('../../config/db');
+const { anonymizeRandom } = require('../utils/anonymize'); 
+const {
+  createSession,
   refreshSession,
   updateSessionStatus,
   deleteSession: _deleteSession
 } = require('./session');
 
 exports.createSession = async (username, ip, deviceId) => {
-  const sessionId = await createSession(username, ip, deviceId);
+  const ipHash = anonymizeRandom(ip);
+  const deviceIdHash = anonymizeRandom(deviceId);
+
+  const sessionId = await createSession(username, ipHash, deviceIdHash);
   const token = `${username}:${sessionId}`;
   return { token };
 };
 
 exports.verifySession = async (token) => {
-  const decodedToken = decodeURIComponent(token);
   console.log('verifySession 호출됨, token:', token);
 
-  const isBlacklisted = await redisClient.get(`blacklist:${decodedToken}`);
+  const isBlacklisted = await redisClient.get(`blacklist:${token}`);
   if (isBlacklisted) {
     return { valid: false, reason: '블랙리스트 토큰' };
   }
 
-  const [tokenUsername, ...rest] = decodedToken.split(':');
-  const tokenSessionId = rest.join(':');
+  const [tokenUsername, tokenSessionId] = token.split(':');
   
   if (!tokenUsername || !tokenSessionId) {
     return { valid: false };
