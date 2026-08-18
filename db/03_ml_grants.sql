@@ -11,9 +11,12 @@
 --
 -- [실행 순서] ml_schema.sql 실행 후 적용할 것
 --
--- [비밀번호]
---            SQL 파일에 평문으로 남기지 않기 위해 자리표시자로 두었습니다.
---            (F-08 §5 「키를 코드에 하드코딩」 금지 조항과 동일 성격)
+-- [비밀번호] 개발 단계 한정
+--            본 파일의 계정 비밀번호는 개발 환경 전용이며 SQL에 직접 기재합니다.
+--            운영 전환 시에는 초기화 스크립트에서 분리하여 환경변수 주입 방식으로
+--            변경합니다. (F-08 §5 「키를 코드에 하드코딩」 금지 조항 준수)
+--            AES_KEY·USERID_SALT·COMPARE_SALT 등 비식별화 키는 본 조항의 예외가
+--            아니며 환경변수로만 관리합니다.
 -- =====================================================================
 
 
@@ -23,8 +26,8 @@
 --    node-server / ml-service 컨테이너에서 접속하며, 컨테이너 IP 가
 --    재생성 시마다 바뀌기 때문. 외부 노출은 compose 의 ports 설정으로 통제.
 -- ---------------------------------------------------------------------
-CREATE USER IF NOT EXISTS 'ml_writer'@'%' IDENTIFIED BY '<ML_WRITER_PASSWORD>';
-CREATE USER IF NOT EXISTS 'ml_reader'@'%' IDENTIFIED BY '<ML_READER_PASSWORD>';
+CREATE USER IF NOT EXISTS 'ml_writer'@'%' IDENTIFIED BY 'f7f2659489612bf13645638bf28eae1ea5eadee358ac9087';
+CREATE USER IF NOT EXISTS 'ml_reader'@'%' IDENTIFIED BY 'b0a38fd74d5bac8633cae7d847f06b36ab059f827ceb859e';
 
 
 -- ---------------------------------------------------------------------
