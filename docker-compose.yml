@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
     container_name: auth_node
     env_file:
-      - ./node-server/.env.dev
+      - .env.dev
     ports:
       - "3000:3000"
     environment:
