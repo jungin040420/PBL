@@ -3,135 +3,367 @@
 -- MySQL Event Scheduler 자동 파기 Event 등록
 --
 -- 근거 문서 : F-09 v2.0 §3 「Event Scheduler 실행 주기 및 파기 쿼리 정의」
---             audit_logs      : 매일 새벽 2시 / created_at   < NOW() - INTERVAL 1 YEAR
---             ml_feature_logs : 매일 새벽 2시 / created_at   < NOW() - INTERVAL 90 DAY
---             ml_predictions  : 매일 새벽 2시 / predicted_at < NOW() - INTERVAL 1 YEAR
+--
+--             audit_logs
+--               : 매일 새벽 2시
+--               : created_at < NOW() - INTERVAL 1 YEAR
+--
+--             ml_feature_logs
+--               : 매일 새벽 2시
+--               : data_source='REAL'
+--               : created_at < NOW() - INTERVAL 90 DAY
+--
+--             ml_predictions
+--               : 매일 새벽 2시
+--               : predicted_at < NOW() - INTERVAL 1 YEAR
+--
+--             risk_scores
+--               : 매일 새벽 2시
+--               : created_at < NOW() - INTERVAL 1 YEAR
+--
 -- 담당자     : 윤정인
--- 작성일     : 2026.07.29 (2026.08.05 audit_logs 추가)
+-- 작성일     : 2026.07.29
+-- 수정일     : 2026.08.18
 --
--- [실행 순서] 01_init.sql, 02_ml_schema.sql 실행 후 적용할 것
+-- [실행 순서]
+--   01_init.sql
+--   02_ml_schema.sql
+--   실행 후 적용할 것
 --
--- [실행 주체] 본 Event 는 관리자 계정으로 생성하며, 생성한 계정이
---             DEFINER 가 됩니다. ml_writer / ml_reader 에는 DELETE 권한을
---             부여하지 않습니다. (F-08 §1 최소권한)
+-- [실행 주체]
+--   본 Event는 관리자 계정으로 생성하며,
+--   생성한 계정이 DEFINER가 됩니다.
+--
+--   ml_writer / ml_reader 에는 DELETE 권한을 부여하지 않습니다.
+--   (F-08 §1 최소권한)
 -- =====================================================================
 
 
 -- ---------------------------------------------------------------------
--- 0. [서버 담당자 확인 필요] Event Scheduler 활성화
+-- 0. Event Scheduler 활성화
 --
---    MySQL Event Scheduler 는 기본적으로 비활성화 상태입니다.
---    아래 두 가지를 모두 적용해야 재시작 후에도 유지됩니다. (F-09 v2.0 §3)
+-- MySQL Event Scheduler는 기본적으로 비활성화될 수 있으므로
+-- 운영 환경에서 활성화 여부를 확인한다.
 --
---    (1) 즉시 적용
---        SET GLOBAL event_scheduler = ON;
+-- 즉시 적용:
 --
---    (2) 영구 적용 — my.cnf 의 [mysqld] 섹션에 추가
---        event_scheduler = ON
+--   SET GLOBAL event_scheduler = ON;
 --
---    확인 : SHOW VARIABLES LIKE 'event_scheduler';   -->  ON 이어야 정상
+-- 영구 적용:
+--
+--   my.cnf
+--
+--   [mysqld]
+--   event_scheduler = ON
+--
+-- 확인:
+--
+--   SHOW VARIABLES LIKE 'event_scheduler';
+--
+-- 결과가 ON이어야 정상
 -- ---------------------------------------------------------------------
+
 SET GLOBAL event_scheduler = ON;
 
+
+-- =====================================================================
+-- ML DB
+-- =====================================================================
 
 USE ml_db;
 
 
 -- ---------------------------------------------------------------------
--- 1. ml_feature_logs — Sliding Window 90일
+-- 1. ml_feature_logs
 --
---    Isolation Forest 재학습 시 최근 90일 데이터를 사용하는 초기 권장안에
---    따른 원본 데이터 보유량 제한. 재학습 조건(7일 경과 또는 신규 1,000건)
---    과는 무관하게 보유량 자체를 90일로 제한합니다. (F-09 v2.0)
+-- REAL 데이터 90일 Sliding Window
+--
+-- 중요:
+--
+-- TEST 데이터는 Regression Test 기준 데이터로 유지해야 하므로
+-- 자동 파기 대상에서 제외한다.
+--
+-- 따라서:
+--
+--   data_source = 'REAL'
+--
+-- 조건을 반드시 포함한다.
 -- ---------------------------------------------------------------------
+
 DROP EVENT IF EXISTS ev_purge_ml_feature_logs;
 
 CREATE EVENT ev_purge_ml_feature_logs
   ON SCHEDULE
     EVERY 1 DAY
-    STARTS (TIMESTAMP(CURRENT_DATE) + INTERVAL 1 DAY + INTERVAL 2 HOUR)
-  COMMENT 'F-09 v2.0: ml_feature_logs 90일 Sliding Window 파기. 매일 02:00'
+
+    STARTS (
+      TIMESTAMP(CURRENT_DATE)
+      + INTERVAL 1 DAY
+      + INTERVAL 2 HOUR
+    )
+
+  COMMENT
+    'F-09 v2.0: ml_feature_logs REAL 데이터 90일 Sliding Window 파기. 매일 02:00'
+
   DO
-    DELETE FROM ml_db.ml_feature_logs
-     WHERE created_at < NOW() - INTERVAL 90 DAY;
+
+DELETE FROM ml_db.ml_feature_logs
+
+WHERE data_source = 'REAL'
+
+  AND created_at
+    < NOW() - INTERVAL 90 DAY;
 
 
 -- ---------------------------------------------------------------------
--- 2. ml_predictions — 1년 보존
+-- 2. ml_predictions
 --
---    AI 자동 판단 결과의 감사 기록. audit_logs 와 동일 성격.
---    근거 : 개인정보보호법 시행령 제48조의2 (감사기록 보관)
---           EU AI Act — 고위험 AI 자동 생성 로그 보관 의무
---    (F-09 v2.0 §3 및 법적 근거표)
+-- ML 자동 판단 결과 1년 보존
 --
---    ml_feature_logs 와 보존기간이 다르므로 FOREIGN KEY 를 걸지 않습니다.
---    90일 경과 후 ml_predictions 레코드는 대응하는 입력 피처 없이
---    단독으로 남으며, 이는 의도된 설계입니다.
+-- ml_feature_logs와 보존기간이 다르므로
+-- FOREIGN KEY를 설정하지 않는다.
+--
+-- event_id를 통해 논리적으로만 연결한다.
 -- ---------------------------------------------------------------------
+
 DROP EVENT IF EXISTS ev_purge_ml_predictions;
 
 CREATE EVENT ev_purge_ml_predictions
   ON SCHEDULE
     EVERY 1 DAY
-    STARTS (TIMESTAMP(CURRENT_DATE) + INTERVAL 1 DAY + INTERVAL 2 HOUR)
-  COMMENT 'F-09 v2.0: ml_predictions 1년 보존 후 파기. 매일 02:00'
+
+    STARTS (
+      TIMESTAMP(CURRENT_DATE)
+      + INTERVAL 1 DAY
+      + INTERVAL 2 HOUR
+    )
+
+  COMMENT
+    'F-09 v2.0: ml_predictions 1년 보존 후 파기. 매일 02:00'
+
   DO
-    DELETE FROM ml_db.ml_predictions
-     WHERE predicted_at < NOW() - INTERVAL 1 YEAR;
+
+DELETE FROM ml_db.ml_predictions
+
+WHERE predicted_at
+          < NOW() - INTERVAL 1 YEAR;
+
+
+-- =====================================================================
+-- MFA DB
+-- =====================================================================
 
 
 -- ---------------------------------------------------------------------
--- 3. audit_logs — 1년 보존
+-- 3. audit_logs
 --
---    감사 로그의 법정 보관 의무 기간 경과분 파기.
---    근거 : 개인정보보호법 시행령 제48조의2 (감사기록 최소 1년 보관)
---           보관 의무 경과분은 같은 법 제21조에 따라 파기
---    (F-09 v2.0 §3 및 법적 근거표)
+-- 감사 로그 1년 보존
 --
---    본 파일은 USE ml_db 상태이므로 Event 이름을 스키마로 한정합니다.
---    한정하지 않으면 ml_db 소속 Event 로 생성됩니다.
---
---    [선행 조건] 01_init.sql 에 audit_logs 테이블이 생성되어 있어야 합니다.
---                (테이블 정의는 ① 인증 담당 소관)
+-- 본 파일은 USE ml_db 상태이므로
+-- Event 이름 및 테이블 이름에 mfa_db 스키마를 명시한다.
 -- ---------------------------------------------------------------------
+
 DROP EVENT IF EXISTS mfa_db.ev_purge_audit_logs;
 
 CREATE EVENT mfa_db.ev_purge_audit_logs
   ON SCHEDULE
     EVERY 1 DAY
-    STARTS (TIMESTAMP(CURRENT_DATE) + INTERVAL 1 DAY + INTERVAL 2 HOUR)
-  COMMENT 'F-09 v2.0: audit_logs 1년 보존 후 파기. 매일 02:00'
+
+    STARTS (
+      TIMESTAMP(CURRENT_DATE)
+      + INTERVAL 1 DAY
+      + INTERVAL 2 HOUR
+    )
+
+  COMMENT
+    'F-09 v2.0: audit_logs 1년 보존 후 파기. 매일 02:00'
+
   DO
-    DELETE FROM mfa_db.audit_logs
-     WHERE created_at < NOW() - INTERVAL 1 YEAR;
+
+DELETE FROM mfa_db.audit_logs
+
+WHERE created_at
+          < NOW() - INTERVAL 1 YEAR;
+
+
+-- =====================================================================
+-- AUTH DB
+-- =====================================================================
 
 
 -- ---------------------------------------------------------------------
--- 4. 검증 (F-09 v2.0 §「운영 점검」)
+-- 4. risk_scores
 --
---   SHOW EVENTS FROM ml_db;
---     --> ev_purge_ml_feature_logs, ev_purge_ml_predictions 가
---         ENABLED 상태여야 정상
+-- 자동 인증 판단 결과의 감사/이의제기 대응 기록
 --
---   SHOW EVENTS FROM mfa_db;
---     --> ev_purge_audit_logs 가 ENABLED 상태여야 정상
+-- 보존기간:
+--   1년
 --
---     운영 배포 후 1회 + 월 1회 확인
+-- 기존 risk_scores 테이블에는 created_at 인덱스가 없으므로
+-- 파기 Event 성능 확보를 위해 인덱스를 추가한다.
 --
---   SHOW VARIABLES LIKE 'event_scheduler';
---     --> ON
+-- 주의:
+--   이미 idx_risk_created 인덱스가 존재하는 환경에서는
+--   CREATE INDEX가 실패할 수 있으므로
+--   운영 반영 전 SHOW INDEX로 존재 여부를 확인한다.
 -- ---------------------------------------------------------------------
+
+USE authdb;
 
 
 -- ---------------------------------------------------------------------
--- 5. [미구현] 삭제 건수 감사 로그 기록
+-- risk_scores created_at 인덱스 확인 예시
 --
---    F-09 v2.0 은 "Event Scheduler 실행 완료 후 삭제 건수를 F-06 감사 로그에
---    기록" 하도록 정의하고 있습니다. 본 파일은 삭제만 수행하며 감사 로그
---    기록은 포함하지 않았습니다.
+-- SHOW INDEX FROM risk_scores;
 --
---    F-06 감사 로그의 스키마·기록 주체가 확정된 뒤
---    ROW_COUNT() 값을 적재하는 절차를 추가해야 합니다.
---    (해당 테이블이 mfa_db 에 있을 경우 DEFINER 계정의 교차 스키마 쓰기
---     권한이 필요하므로 서버 담당자와 협의 필요)
+-- idx_risk_created가 없다면 아래 CREATE INDEX 실행
 -- ---------------------------------------------------------------------
+
+-- CREATE INDEX idx_risk_created
+-- ON risk_scores(created_at);
+
+
+-- ---------------------------------------------------------------------
+-- risk_scores 1년 보존 Event
+-- ---------------------------------------------------------------------
+
+DROP EVENT IF EXISTS ev_purge_risk_scores;
+
+CREATE EVENT ev_purge_risk_scores
+  ON SCHEDULE
+    EVERY 1 DAY
+
+    STARTS (
+      TIMESTAMP(CURRENT_DATE)
+      + INTERVAL 1 DAY
+      + INTERVAL 2 HOUR
+    )
+
+  COMMENT
+    'F-09 v2.0: risk_scores 1년 보존 후 파기. 매일 02:00'
+
+  DO
+
+DELETE FROM authdb.risk_scores
+
+WHERE created_at
+          < NOW() - INTERVAL 1 YEAR;
+
+
+-- =====================================================================
+-- 5. 검증
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Event Scheduler 확인
+-- ---------------------------------------------------------------------
+
+-- SHOW VARIABLES LIKE 'event_scheduler';
+
+
+-- ---------------------------------------------------------------------
+-- ml_db Event 확인
+-- ---------------------------------------------------------------------
+
+-- SHOW EVENTS FROM ml_db;
+
+-- 정상 기대 Event:
+--
+-- ev_purge_ml_feature_logs
+-- ev_purge_ml_predictions
+
+
+-- ---------------------------------------------------------------------
+-- mfa_db Event 확인
+-- ---------------------------------------------------------------------
+
+-- SHOW EVENTS FROM mfa_db;
+
+-- 정상 기대 Event:
+--
+-- ev_purge_audit_logs
+
+
+-- ---------------------------------------------------------------------
+-- authdb Event 확인
+-- ---------------------------------------------------------------------
+
+-- SHOW EVENTS FROM authdb;
+
+-- 정상 기대 Event:
+--
+-- ev_purge_risk_scores
+
+
+-- ---------------------------------------------------------------------
+-- risk_scores 인덱스 확인
+-- ---------------------------------------------------------------------
+
+-- SHOW INDEX FROM authdb.risk_scores;
+
+
+-- =====================================================================
+-- 6. 데이터 파기 정책 요약
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- ml_feature_logs
+--
+-- REAL:
+--   90일 초과 데이터 삭제
+--
+-- TEST:
+--   Regression Test 기준 데이터이므로
+--   REAL 자동 파기 Event 대상에서 제외
+-- ---------------------------------------------------------------------
+
+-- DELETE FROM ml_db.ml_feature_logs
+-- WHERE data_source = 'REAL'
+--   AND created_at < NOW() - INTERVAL 90 DAY;
+
+
+-- ---------------------------------------------------------------------
+-- ml_predictions
+--
+-- 1년 보존
+-- ---------------------------------------------------------------------
+
+-- DELETE FROM ml_db.ml_predictions
+-- WHERE predicted_at < NOW() - INTERVAL 1 YEAR;
+
+
+-- ---------------------------------------------------------------------
+-- audit_logs
+--
+-- 1년 보존
+-- ---------------------------------------------------------------------
+
+-- DELETE FROM mfa_db.audit_logs
+-- WHERE created_at < NOW() - INTERVAL 1 YEAR;
+
+
+-- ---------------------------------------------------------------------
+-- risk_scores
+--
+-- 1년 보존
+-- ---------------------------------------------------------------------
+
+-- DELETE FROM authdb.risk_scores
+-- WHERE created_at < NOW() - INTERVAL 1 YEAR;
+
+
+-- =====================================================================
+-- 7. 삭제 건수 감사 로그
+--
+-- F-09 v2.0에서는 Event Scheduler 실행 후
+-- 삭제 건수를 감사 로그에 기록하도록 정의하고 있다.
+--
+-- 현재 Event는 삭제 기능만 구현한다.
+--
+-- F-06 감사 로그 스키마 및 기록 주체가 확정되면
+-- ROW_COUNT() 결과를 audit_logs 등에 기록하는 절차를
+-- 별도로 추가한다.
+--
+-- 교차 스키마 INSERT가 필요한 경우
+-- DEFINER 계정의 최소권한 정책을 함께 검토한다.
+-- =====================================================================
