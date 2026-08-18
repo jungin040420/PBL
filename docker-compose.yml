@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: auth_node
     env_file:
-      - .env.dev
+      - ./node-server/.env.dev
     ports:
       - "3000:3000"
     environment:
@@ -17,7 +17,7 @@ services:
       - MYSQL_DATABASE=${DB_NAME}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - PYTHON_RISK_URL=http://python:8000
+      - PYTHON_RISK_URL=http://python:5000
       - TZ=Asia/Seoul
     depends_on:
       mysql:
