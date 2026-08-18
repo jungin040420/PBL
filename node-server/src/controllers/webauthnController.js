@@ -68,7 +68,7 @@ exports.registerFinish = async (req, res) => {
 
       await db.query(
         `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
-        [failUserIdHash, 'REGISTRATION_FAIL']
+        [failUserIdHash, 'REGISTER_FAIL']
       );
       try {
         await db.query(
@@ -86,11 +86,11 @@ exports.registerFinish = async (req, res) => {
       return res.status(400).json({ error: '등록 검증 실패' });
     }
 
-    const userIdHash = hashUserId = (username);
+    const userIdHash = hashUserId(username);
 
     await db.query(
       `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'success', ?)`,
-      [hashUserId(username), 'REGISTER_SUCCESS']
+      [userIdHash, 'REGISTER_SUCCESS']
     );
 
     try {
@@ -119,7 +119,7 @@ exports.registerFinish = async (req, res) => {
 
         await db.query(
           `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
-          [throwUserIdHash, 'REGISTRATION_ERROR']
+          [throwUserIdHash, 'REGISTER_FAIL']
         );
 
         await db.query(
@@ -172,8 +172,9 @@ exports.loginStart = async (req, res) => {
 
 //서명 검증 및 세션 발급
 exports.loginFinish = async (req, res) => {
+  const { username } = req.body;
   try {
-    const { username, challengeId, credential } = req.body;
+    const { challengeId, credential } = req.body;
     const context = req.context || {};
 
     // loginFinish에서 시간 차이 계산
@@ -392,6 +393,30 @@ exports.loginFinish = async (req, res) => {
 
   } catch (error) {
     console.error('loginFinish 오류:', error);
+
+    if (username) {
+      try {
+        const throwUserIdHash = hashUserId(username);
+
+        await db.query(
+          `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
+          [throwUserIdHash, 'LOGIN_FAIL']
+        );
+
+        await db.query(
+          'INSERT INTO mfa_db.audit_logs (event_type, payload) VALUES (?, ?)',
+          ['LOGIN_FAIL', encryptObject({
+            userIdHash: throwUserIdHash,
+            result: 'fail',
+            reason: error.message || 'UNKNOWN_ERROR',
+            timestamp: new Date().toISOString(),
+          })]
+        );
+      } catch (logError) {
+        console.error('[AUDIT_LOG_FAILURE] catch 블록 감사 로그 실패:', logError.message);
+      }
+    }
+
     return res.status(500).json({ error: '서버 오류' });
   }
 };
