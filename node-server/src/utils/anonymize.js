@@ -57,7 +57,7 @@ const anonymizeRandom = (value) => {
  * - 목적: ML 피처 로그의 사용자별 그룹핑 (동일 입력 → 동일 해시 필요)
  * - anonymizeRandom()과 절대 혼용하지 않는다 (F-08 규칙 5 명시)
  *
- * @param {number|string} userId users.id (DB PK)
+ * @param {string} userId 사용자 식별자 (username)
  * @returns {string} 64자리 hex 해시값
  */
 const hashUserId = (userId) => {

@@ -1,4 +1,7 @@
+
+
 services:
+  # Node.js 서버
   node:
     build:
       context: ./node-server
@@ -14,7 +17,11 @@ services:
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
       - MYSQL_PASSWORD=${DB_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_DATABASE=authdb
+      - ML_DB_PORT=3306
+      - ML_DB_USER=ml_writer
+      - ML_DB_PASSWORD=${ML_WRITER_PASSWORD}
+      - ML_DB_NAME=ml_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PYTHON_RISK_URL=http://python:5000
@@ -30,7 +37,9 @@ services:
     networks:
       - auth_network
     restart: unless-stopped
+    
 
+  # Python 리스크 계산 서버
   python:
     build:
       context: ./python-risk
@@ -46,7 +55,7 @@ services:
       - DB_NAME=ml_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - TZ=Asia/Seoul
+      - TZ=Asia/Seoul             
     depends_on:
       mysql:
         condition: service_healthy
@@ -57,12 +66,13 @@ services:
     networks:
       - auth_network
     restart: unless-stopped
-    
+
+  # MySQL
   mysql:
     image: mysql:8.0
     container_name: auth_mysql
     env_file:
-      - ./node-server/.env.dev
+      - .env.dev
     command: --event-scheduler=ON
     ports:
       - "3306:3306"
@@ -85,9 +95,12 @@ services:
       - auth_network
     restart: unless-stopped
 
+  # Redis
   redis:
     image: redis:7.2
     container_name: auth_redis
+    environment:
+      - TZ=Asia/Seoul
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
