@@ -6,37 +6,56 @@ import pymysql
 
 # ============================================================
 # MySQL 설정
+#
+# ML 분석/학습 데이터 조회는 SELECT 전용 ml_reader 사용
+#
+# Docker 내부 기본값:
+#   host     = mysql
+#   port     = 3306
+#   user     = ml_reader
+#   database = ml_db
+#
+# 비밀번호는 코드에 직접 작성하지 않고 환경변수로 전달한다.
 # ============================================================
 
 DB_HOST = os.getenv(
-    "DB_HOST",
-    "localhost",
+    "ML_DB_HOST",
+    os.getenv(
+        "DB_HOST",
+        "mysql",
+    ),
 )
 
 DB_PORT = int(
     os.getenv(
-        "DB_PORT",
-        "3307",
+        "ML_DB_PORT",
+        os.getenv(
+            "DB_PORT",
+            "3306",
+        ),
     )
 )
 
 DB_USER = os.getenv(
-    "DB_USER",
-    "authuser",
+    "ML_READER_USER",
+    "ml_reader",
 )
 
 DB_PASSWORD = os.getenv(
-    "DB_PASSWORD",
+    "ML_READER_PASSWORD",
+    os.getenv(
+        "ML_DB_PASSWORD",
+    ),
 )
 
 DB_NAME = os.getenv(
-    "DB_NAME",
-    "mfa_db",
+    "ML_DB_NAME",
+    "ml_db",
 )
 
 
 # ============================================================
-# 기존 Isolation Forest 학습 Numeric Feature
+# Isolation Forest 학습 Numeric Feature
 # ============================================================
 
 NUMERIC_FEATURES = [
@@ -49,7 +68,9 @@ NUMERIC_FEATURES = [
 
 
 # ============================================================
-# 기존 Isolation Forest 학습 Boolean Feature
+# Isolation Forest 학습 Boolean Feature
+#
+# 최종 학습 Feature 중 Boolean Feature
 # ============================================================
 
 ML_BOOLEAN_FEATURES = [
@@ -57,14 +78,15 @@ ML_BOOLEAN_FEATURES = [
     "user_agent_changed",
     "is_new_device",
     "region_changed",
+    "has_previous_context",
 ]
 
 
 # ============================================================
 # 추가 수집/분석 Feature
 #
-# sign_count_abnormal은 현재 DB에는 저장하지만
-# Isolation Forest 9 Feature에는 아직 포함하지 않는다.
+# sign_count_abnormal은 DB에는 저장하지만
+# 현재 Isolation Forest 학습 Feature에는 포함하지 않는다.
 # ============================================================
 
 COLLECTED_BOOLEAN_FEATURES = [
@@ -98,8 +120,10 @@ CATEGORICAL_FEATURES = [
 def get_connection():
 
     if not DB_PASSWORD:
+
         raise RuntimeError(
-            "DB_PASSWORD 환경변수가 설정되지 않았습니다."
+            "ML_READER_PASSWORD 또는 "
+            "ML_DB_PASSWORD 환경변수가 설정되지 않았습니다."
         )
 
     return pymysql.connect(
@@ -110,7 +134,7 @@ def get_connection():
         database=DB_NAME,
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=3,
+        connect_timeout=5,
     )
 
 
@@ -126,7 +150,9 @@ def load_real_rows():
 
         sql = """
             SELECT
-                id,
+                event_id,
+                created_at,
+                data_source,
                 login_region,
                 login_frequency,
                 failed_login_count,
@@ -134,17 +160,19 @@ def load_real_rows():
                 user_agent_changed,
                 is_new_device,
                 region_changed,
+                has_previous_context,
                 sign_count_abnormal,
+                credential_mismatch,
                 challenge_response_time,
                 login_hour,
-                day_of_week,
-                created_at
+                day_of_week
             FROM ml_feature_logs
             WHERE data_source = 'REAL'
-            ORDER BY id ASC
+            ORDER BY created_at ASC, event_id ASC
         """
 
         with connection.cursor() as cursor:
+
             cursor.execute(sql)
 
             return cursor.fetchall()
@@ -163,6 +191,14 @@ def print_basic_summary(rows):
     print("=" * 70)
     print("REAL 로그인 데이터 품질 분석")
     print("=" * 70)
+
+    print(
+        f"DB: {DB_NAME}"
+    )
+
+    print(
+        f"조회 계정: {DB_USER}"
+    )
 
     print(
         f"REAL 총 데이터 수: "
@@ -314,7 +350,6 @@ def print_boolean_summary(rows):
             f"{true_rate:.2f}%"
         )
 
-        # signCount는 별도 상태 표시
         if field == "sign_count_abnormal":
 
             if true_count == 0:
@@ -457,6 +492,8 @@ def print_day_distribution(rows):
 
 # ============================================================
 # Isolation Forest 학습 Feature 상태
+#
+# 현재 최종 Feature = 10개
 # ============================================================
 
 def print_ml_feature_status():
@@ -474,6 +511,7 @@ def print_ml_feature_status():
         "challenge_response_time",
         "login_hour",
         "day_of_week",
+        "has_previous_context",
     ]
 
     for index, feature in enumerate(
@@ -486,6 +524,7 @@ def print_ml_feature_status():
         )
 
     print()
+
     print(
         "현재 ML 학습 Feature 수: "
         f"{len(ml_features)}개"
@@ -531,8 +570,9 @@ def print_quality_warnings(rows):
             f"{len(rows)}건 / 목표 80~100건"
         )
 
+
     # --------------------------------------------------------
-    # 기존 ML Boolean Feature 다양성
+    # ML Boolean Feature 다양성
     # --------------------------------------------------------
 
     for field in ML_BOOLEAN_FEATURES:
@@ -548,6 +588,7 @@ def print_quality_warnings(rows):
                 f"{field} 값 다양성 부족: "
                 f"{values}"
             )
+
 
     # --------------------------------------------------------
     # Numeric Feature 다양성
@@ -567,6 +608,7 @@ def print_quality_warnings(rows):
                 f"{field} 값 다양성 부족"
             )
 
+
     # --------------------------------------------------------
     # login_region 품질
     # --------------------------------------------------------
@@ -583,6 +625,7 @@ def print_quality_warnings(rows):
             "login_region 다양성 부족: "
             f"{login_regions}"
         )
+
 
     # --------------------------------------------------------
     # sign_count_abnormal 품질
@@ -603,6 +646,7 @@ def print_quality_warnings(rows):
             f"{sign_count_values} "
             "(현재는 수집/분석용 Feature)"
         )
+
 
     # --------------------------------------------------------
     # 경고 출력
@@ -633,7 +677,11 @@ def print_additional_feature_summary(rows):
     print()
     print("[추가 수집 Feature 상태]")
 
+
+    # --------------------------------------------------------
     # loginRegion
+    # --------------------------------------------------------
+
     login_regions = [
         row["login_region"]
         for row in rows
@@ -663,7 +711,11 @@ def print_additional_feature_summary(rows):
         "별도 인코딩 정책 필요"
     )
 
+
+    # --------------------------------------------------------
     # signCountAbnormal
+    # --------------------------------------------------------
+
     sign_values = [
         int(
             row["sign_count_abnormal"]
@@ -677,6 +729,7 @@ def print_additional_feature_summary(rows):
     )
 
     print()
+
     print(
         "signCountAbnormal:"
     )
@@ -697,7 +750,44 @@ def print_additional_feature_summary(rows):
 
     print(
         "  사유: signCount 이상은 "
-        "WebAuthn 검증 단계에서 즉시 차단"
+        "WebAuthn 검증 단계에서 즉시 탐지"
+    )
+
+
+    # --------------------------------------------------------
+    # hasPreviousContext
+    # --------------------------------------------------------
+
+    previous_context_values = [
+        int(
+            row["has_previous_context"]
+            or 0
+        )
+        for row in rows
+    ]
+
+    previous_context_true_count = (
+        previous_context_values.count(1)
+    )
+
+    print()
+
+    print(
+        "hasPreviousContext:"
+    )
+
+    print(
+        f"  수집 데이터: "
+        f"{len(previous_context_values)}건"
+    )
+
+    print(
+        f"  이전 Context 존재: "
+        f"{previous_context_true_count}건"
+    )
+
+    print(
+        "  ML 학습 반영: 채택"
     )
 
 
@@ -706,6 +796,17 @@ def print_additional_feature_summary(rows):
 # ============================================================
 
 def main():
+
+    print(
+        "ML DB 접속 설정:",
+        {
+            "host": DB_HOST,
+            "port": DB_PORT,
+            "user": DB_USER,
+            "database": DB_NAME,
+            "has_password": bool(DB_PASSWORD),
+        },
+    )
 
     try:
 
@@ -723,6 +824,7 @@ def main():
 
         return
 
+
     print_basic_summary(
         rows
     )
@@ -734,6 +836,7 @@ def main():
         )
 
         return
+
 
     print_null_summary(
         rows
@@ -770,10 +873,16 @@ def main():
     )
 
     print()
+
     print("=" * 70)
-    print("REAL 데이터 분석 완료")
+
+    print(
+        "REAL 데이터 분석 완료"
+    )
+
     print("=" * 70)
 
 
 if __name__ == "__main__":
+
     main()

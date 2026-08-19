@@ -28,29 +28,41 @@ from isolation_model import (  # noqa: E402
 # ============================================================
 
 DB_HOST = os.getenv(
-    "DB_HOST",
-    "localhost",
+    "ML_DB_HOST",
+    os.getenv(
+        "DB_HOST",
+        "localhost",
+    ),
 )
 
 DB_PORT = int(
     os.getenv(
-        "DB_PORT",
-        "3307",
+        "ML_DB_PORT",
+        os.getenv(
+            "DB_PORT",
+            "3307",
+        ),
     )
 )
 
 DB_USER = os.getenv(
-    "DB_USER",
-    "authuser",
+    "ML_DB_USER",
+    os.getenv(
+        "DB_USER",
+        "ml_reader",
+    ),
 )
 
 DB_PASSWORD = os.getenv(
-    "DB_PASSWORD",
+    "ML_DB_PASSWORD",
+    os.getenv(
+        "DB_PASSWORD",
+    ),
 )
 
 DB_NAME = os.getenv(
-    "DB_NAME",
-    "mfa_db",
+    "ML_DB_NAME",
+    "ml_db",
 )
 
 
@@ -66,11 +78,14 @@ def load_training_data_from_mysql() -> np.ndarray:
     """
     ml_feature_logs 테이블에서
     data_source='REAL' 데이터만 가져온다.
+
+    FEATURE_ORDER와 동일한 순서로
+    10개 Feature를 조회한다.
     """
 
     if not DB_PASSWORD:
         raise RuntimeError(
-            "DB_PASSWORD 환경변수가 설정되지 않았습니다."
+            "ML DB 비밀번호 환경변수가 설정되지 않았습니다."
         )
 
     connection = None
@@ -99,10 +114,11 @@ def load_training_data_from_mysql() -> np.ndarray:
                     0
                 ) AS challenge_response_time,
                 login_hour,
-                day_of_week
+                day_of_week,
+                has_previous_context
             FROM ml_feature_logs
             WHERE data_source = 'REAL'
-            ORDER BY id ASC
+            ORDER BY event_id ASC
         """
 
         with connection.cursor() as cursor:
@@ -122,6 +138,11 @@ def load_training_data_from_mysql() -> np.ndarray:
         rows,
         dtype=float,
     )
+
+    if feature_matrix.ndim != 2:
+        raise ValueError(
+            "DB 학습 데이터가 2차원 Matrix가 아닙니다."
+        )
 
     if feature_matrix.shape[1] != len(
         FEATURE_ORDER
@@ -209,6 +230,14 @@ def generate_synthetic_data(
         size=n,
     )
 
+    # 대부분의 기존 사용자는 이전 Context가 존재하고,
+    # 일부는 신규 사용자 또는 이전 Context 미보유 상태로 가정
+    has_previous_context = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.15, 0.85],
+    )
+
     return np.column_stack(
         [
             login_frequency,
@@ -220,6 +249,7 @@ def generate_synthetic_data(
             challenge_response_time,
             login_hour,
             day_of_week,
+            has_previous_context,
         ]
     ).astype(float)
 
@@ -245,6 +275,7 @@ def print_feature_order() -> None:
 # ============================================================
 
 def main() -> None:
+
     parser = argparse.ArgumentParser(
         description=(
             "ml_feature_logs REAL 데이터 기반 "
@@ -283,6 +314,7 @@ def main() -> None:
     # --------------------------------------------------------
 
     if not 0 < args.contamination <= 0.5:
+
         print(
             "[학습 중단] contamination은 "
             "0보다 크고 0.5 이하여야 합니다."
@@ -290,6 +322,10 @@ def main() -> None:
 
         sys.exit(1)
 
+
+    # --------------------------------------------------------
+    # Feature 순서 출력
+    # --------------------------------------------------------
 
     print_feature_order()
 
@@ -301,6 +337,7 @@ def main() -> None:
     # --------------------------------------------------------
 
     try:
+
         feature_matrix = (
             load_training_data_from_mysql()
         )
@@ -318,6 +355,7 @@ def main() -> None:
         # ----------------------------------------------------
 
         if row_count < args.min_rows:
+
             raise ValueError(
                 f"REAL 학습 데이터 부족: "
                 f"{row_count}건 / "
@@ -336,6 +374,7 @@ def main() -> None:
     ) as error:
 
         if not args.allow_synthetic:
+
             print(
                 f"[학습 중단] {error}"
             )
