@@ -257,9 +257,9 @@ exports.loginFinish = async (req, res) => {
     const prevContext = await redisClient.hGetAll(contextKey);
 
     const currentDeviceHash = hashForCompare(JSON.stringify(context.deviceInfo || {}));
-    const currentIpHash = hashForCompare(context.ip);
-    const currentUaHash = hashForCompare(context.userAgent);
-    const currentCountryHash = hashForCompare(context.country);
+    const currentIpHash = hashForCompare(context.ip || '');
+    const currentUaHash = hashForCompare(context.userAgent || '');
+    const currentCountryHash = hashForCompare(context.country || 'KR');
 
     context.hasPreviousContext = Object.keys(prevContext).length > 0;
 
@@ -269,10 +269,10 @@ exports.loginFinish = async (req, res) => {
     context.locationChanged = context.hasPreviousContext ? prevContext.countryHash !== currentCountryHash : false;
 
     await redisClient.hSet(contextKey, {
-      deviceHash: currentDeviceHash,
-      ipHash: currentIpHash,
-      uaHash: currentUaHash,
-      countryHash: currentCountryHash,
+      deviceHash: String(currentDeviceHash || ''),
+      ipHash: String(currentIpHash || ''),
+      uaHash: String(currentUaHash || ''),
+      countryHash: String(currentCountryHash || ''),
     });
     await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
 
