@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 
-<body>
+<!-- <body>
 <div class="card">
   <h2>로그인</h2>
 
@@ -23,7 +23,7 @@
             id="username"
             autocomplete="username webauthn"
     />
-  </div>
+  </div> -->
 
   <div id="status">
     🔍 사이트를 검사하는 중...
@@ -34,7 +34,6 @@
           type="button"
           id="loginBtn"
           onclick="startPasskeyLogin()"
-          disabled
   >
     Passkey로 로그인
   </button>
@@ -49,7 +48,7 @@
 
 <script src="/js/login.js"></script>
 
-<script>
+<!-- <script>
   // 사이트 검사
   window.addEventListener("load", async () => {
     const status = document.getElementById("status");
@@ -88,7 +87,7 @@
       loginBtn.disabled = true;
     }
   });
-</script>
+</script> -->
 
 </body>
 </html>
