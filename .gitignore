@@ -18,6 +18,13 @@ api-server/__pycache__/
 *.log
 python-risk/risk_logs.jsonl
 
+# 모델 파일
+*.pkl
+python-risk/output/
+
+# 데이터셋
+python-risk/data/
+
 # OS
 .DS_Store
 Thumbs.db
