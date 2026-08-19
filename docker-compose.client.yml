@@ -1,0 +1,13 @@
+﻿services:
+  node:
+    volumes:
+      - ./client:/client:ro
+
+  python:
+    environment:
+      ML_DB_HOST: ${ML_DB_HOST}
+      ML_DB_PORT: ${ML_DB_PORT}
+      ML_DB_USER: ${ML_DB_USER}
+      ML_DB_PASSWORD: ${ML_DB_PASSWORD}
+      ML_DB_NAME: ${ML_DB_NAME}
+      ELASTICSEARCH_URL: http://elasticsearch:9200/risk-logs/_doc

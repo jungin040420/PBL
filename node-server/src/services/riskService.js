@@ -66,6 +66,11 @@ const sendRiskData = async (
             context.signCountAbnormal ??
             false,
 
+        // Credential 불일치 여부
+        credentialMismatch:
+            context.credentialMismatch ??
+            false,
+
         challengeResponseTime:
             context.challengeResponseTime ??
             null,
@@ -128,6 +133,9 @@ const sendRiskData = async (
 
             signCountAbnormal:
             payload.signCountAbnormal,
+
+            credentialMismatch:
+            payload.credentialMismatch,
 
             challengeResponseTime:
             payload.challengeResponseTime,
