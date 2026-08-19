@@ -155,7 +155,7 @@ exports.loginStart = async (req, res) => {
     // loginStart에서 시작 시간 저장
     await redisClient.set(
       `challenge:time:${username}`,
-      Date.now(),
+      String(Date.now()),
       { EX: 300 }
     );
 
