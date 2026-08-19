@@ -34,6 +34,7 @@ services:
     volumes:
       - ./node-server:/app
       - /app/node_modules
+      - ./client:/app/client
     networks:
       - auth_network
     restart: unless-stopped

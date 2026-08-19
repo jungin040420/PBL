@@ -21,7 +21,7 @@ const authLimiter = rateLimit({
   }
 });
 
-const clientPath = path.join(__dirname, '../../client');
+const clientPath = process.env.CLIENT_PATH || path.join(__dirname, '../../client');
 
 console.log('__dirname:', __dirname);
 console.log('client 경로:', clientPath);
