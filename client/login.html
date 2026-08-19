@@ -25,11 +25,16 @@
     />
   </div>
 
-  <div id="status"></div>
+  <div id="status">
+    🔍 사이트를 검사하는 중...
+  </div>
 
+  <!-- 검사 완료 전에는 비활성화 -->
   <button
           type="button"
+          id="loginBtn"
           onclick="startPasskeyLogin()"
+          disabled
   >
     Passkey로 로그인
   </button>
@@ -43,5 +48,47 @@
 </div>
 
 <script src="/js/login.js"></script>
+
+<script>
+  // 사이트 검사
+  window.addEventListener("load", async () => {
+    const status = document.getElementById("status");
+    const loginBtn = document.getElementById("loginBtn");
+
+    try {
+      // AI 검사 API 호출
+      const response = await fetch("/api/site-check");
+
+      if (!response.ok) {
+        throw new Error("사이트 검사 실패");
+      }
+
+      const result = await response.json();
+
+      if (result.safe) {
+        status.textContent = "✅ 안전한 사이트입니다.";
+        status.style.color = "green";
+
+        // 검사 통과 후 로그인 버튼 활성화
+        loginBtn.disabled = false;
+      } else {
+        status.textContent = "⚠️ 안전하지 않은 사이트입니다.";
+        status.style.color = "red";
+
+        // 로그인 버튼 비활성화 유지
+        loginBtn.disabled = true;
+      }
+
+    } catch (error) {
+      console.error(error);
+
+      status.textContent = "❌ 사이트 검사를 완료할 수 없습니다.";
+      status.style.color = "red";
+
+      loginBtn.disabled = true;
+    }
+  });
+</script>
+
 </body>
 </html>

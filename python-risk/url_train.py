@@ -34,9 +34,14 @@ import seaborn as sns
 # 0. 설정
 # ─────────────────────────────────────────────
 
-DATA_PATH = "data/final_dataset_with_all_features_v3_1.csv"
-OUTPUT_DIR = "output"
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent          # ...\PBL\python-risk
+
+DATA_PATH = BASE_DIR / "data" / "final_dataset_with_all_features_v3_1.csv"
+OUTPUT_DIR = BASE_DIR / "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 
 RANDOM_STATE = 42
 
