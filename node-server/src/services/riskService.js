@@ -145,7 +145,7 @@ const sendRiskData = async (
         const response =
             await axios.post(
                 process.env.RISK_API_URL ||
-                "http://localhost:8000/analyze",
+                "http://python:8000/analzye",
 
                 payload,
 
