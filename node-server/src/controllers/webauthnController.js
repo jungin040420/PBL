@@ -67,7 +67,7 @@ exports.registerFinish = async (req, res) => {
       const failUserIdHash = hashUserId(username);
 
       await db.query(
-        `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
+        `INSERT INTO authdb.access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
         [failUserIdHash, 'REGISTER_FAIL']
       );
       try {
@@ -89,7 +89,7 @@ exports.registerFinish = async (req, res) => {
     const userIdHash = hashUserId(username);
 
     await db.query(
-      `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'success', ?)`,
+      `INSERT INTO authdb.access_logs (user_id, auth_result, reason) VALUES (?, 'success', ?)`,
       [userIdHash, 'REGISTER_SUCCESS']
     );
 
@@ -118,7 +118,7 @@ exports.registerFinish = async (req, res) => {
         const throwUserIdHash = hashUserId(username);
 
         await db.query(
-          `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
+          `INSERT INTO authdb.access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
           [throwUserIdHash, 'REGISTER_FAIL']
         );
 
@@ -202,7 +202,7 @@ exports.loginFinish = async (req, res) => {
       const failUserIdHash = hashUserId(username);
 
       await db.query(
-        `INSERT INTO access_logs 
+        `INSERT INTO authdb.access_logs 
         (user_id, auth_result, reason)
         VALUES (?, 'fail', ?)`,
         [failUserIdHash, result.reason || 'VERIFICATION_FAILED']
@@ -277,7 +277,7 @@ exports.loginFinish = async (req, res) => {
     await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
 
     await db.query(
-      `INSERT INTO access_logs 
+      `INSERT INTO authdb.access_logs 
       (user_id, auth_result, reason)
       VALUES (?, 'success', ?)`,
       [userIdHash, 'LOGIN_SUCCESS']
@@ -399,7 +399,7 @@ exports.loginFinish = async (req, res) => {
         const throwUserIdHash = hashUserId(username);
 
         await db.query(
-          `INSERT INTO access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
+          `INSERT INTO authdb.access_logs (user_id, auth_result, reason) VALUES (?, 'fail', ?)`,
           [throwUserIdHash, 'LOGIN_FAIL']
         );
 
