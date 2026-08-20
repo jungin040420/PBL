@@ -1,102 +1,438 @@
-function getInputs() {
-  return {
-    username: document.getElementById('username').value.trim(),
-    displayName: document.getElementById('displayName').value.trim(),
-    email: document.getElementById('email').value.trim(),
-  };
+function setStatus(message) {
+  const statusElement = document.getElementById("status");
+
+  if (statusElement) {
+    statusElement.textContent = message;
+  }
 }
 
-function setStatus(msg) {
-  document.getElementById('status').textContent = msg;
-}
 
-function base64ToUint8Array(base64url) {
-  const base64 = base64url
-    .replace(/-/g, '+')
-    .replace(/_/g, '/')
-    .padEnd(base64url.length + (4 - base64url.length % 4) % 4, '=');
-  return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-}
-
-function toBase64url(buffer) {
-  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-async function startPasskeyRegister() {
-  const { username, displayName, email } = getInputs();
-
-  if (!username || !displayName || !email) {
-    setStatus('모든 항목을 입력해주세요.');
-    return;
+/**
+ * Base64URL 문자열을 ArrayBuffer로 변환
+ */
+function base64UrlToArrayBuffer(value, fieldName = "Base64URL 값") {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${fieldName}이 없거나 올바르지 않습니다.`);
   }
 
+  const base64 = value
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+
+  const paddedBase64 =
+      base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+
+  const binary = window.atob(paddedBase64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes.buffer;
+}
+
+
+/**
+ * ArrayBuffer를 Base64URL 문자열로 변환
+ */
+function arrayBufferToBase64Url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return window
+      .btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+}
+
+
+/**
+ * 서버 응답이 options로 감싸진 경우와
+ * 바로 WebAuthn 옵션을 반환하는 경우를 모두 처리
+ */
+function extractPublicKeyOptions(responseData) {
+  if (!responseData || typeof responseData !== "object") {
+    throw new Error("로그인 시작 응답이 올바르지 않습니다.");
+  }
+
+  if (responseData.error) {
+    throw new Error(responseData.error);
+  }
+
+  return (
+      responseData.options?.publicKey ??
+      responseData.options ??
+      responseData.publicKey ??
+      responseData
+  );
+}
+
+
+/**
+ * Passkey 로그인
+ */
+async function startPasskeyLogin() {
   try {
-    setStatus('서버에서 challenge 요청 중...');
-    const res = await fetch('/auth/register/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, displayName, email }),
-    });
-    const options = await res.json();
-    console.log('서버 응답 options:', options);
+    const usernameInput =
+        document.getElementById("username");
 
-    const rpId = window.location.hostname;
+    const username =
+        usernameInput?.value?.trim();
 
-    setStatus('생체인증 팝업 대기 중...');
-    const credential = await navigator.credentials.create({
-      publicKey: {
-        challenge: base64ToUint8Array(options.challenge),
-        rp: {
-          id: rpId,
-          name: "MFA 보안 시스템"
-        },
-        user: {
-          id: base64ToUint8Array(options.userId),
-          name: username,
-          displayName: displayName,
-        },
-        pubKeyCredParams: [
-          { type: "public-key", alg: -7 },
-          { type: "public-key", alg: -257 },
-        ],
-        authenticatorSelection: {
-          userVerification: 'preferred'
-        }
-      },
-    });
-    console.log('생성된 credential:', credential);
+    if (!username) {
+      setStatus("사용자 아이디를 입력해주세요.");
+      return;
+    }
 
-    setStatus('등록 완료 중...');
-    await fetch('/auth/register/finish', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username,
-        email,
-        challengeId: options.challengeId, // ← 추가
-        credential: {
-          id: credential.id,
-          rawId: toBase64url(credential.rawId),
-          type: credential.type,
-          response: {
-            clientDataJSON: toBase64url(
-              credential.response.clientDataJSON
-            ),
-            attestationObject: toBase64url(
-              credential.response.attestationObject
-            ),
+    if (!window.PublicKeyCredential) {
+      throw new Error(
+          "이 브라우저는 Passkey/WebAuthn을 지원하지 않습니다."
+      );
+    }
+
+    setStatus("로그인 요청 중...");
+
+    /*
+     * 1. 로그인 Challenge 요청
+     */
+    const startResponse = await fetch(
+        "/auth/login/start",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-        },
-      }),
-    });
+          body: JSON.stringify({
+            username,
+          }),
+        }
+    );
 
-    setStatus('등록 완료!');
+    let startData;
 
+    try {
+      startData = await startResponse.json();
+    } catch {
+      throw new Error(
+          `로그인 시작 응답을 읽을 수 없습니다. HTTP ${startResponse.status}`
+      );
+    }
+
+    console.log(
+        "로그인 시작 응답:",
+        startData
+    );
+
+    if (!startResponse.ok) {
+      throw new Error(
+          startData.error ||
+          `로그인 시작 실패 (HTTP ${startResponse.status})`
+      );
+    }
+
+    const publicKeyOptions =
+        extractPublicKeyOptions(startData);
+
+    if (!publicKeyOptions.challenge) {
+      console.error(
+          "challenge 누락 응답:",
+          startData
+      );
+
+      throw new Error(
+          "서버 응답에 challenge가 없습니다."
+      );
+    }
+
+    /*
+     * Firefox 문제 확인용:
+     * 바이너리 변환 전 서버 원본 옵션
+     */
+    console.log(
+        "WebAuthn 변환 전 옵션:",
+        publicKeyOptions
+    );
+
+    /*
+     * 2. WebAuthn용 바이너리 변환
+     */
+    publicKeyOptions.challenge =
+        base64UrlToArrayBuffer(
+            publicKeyOptions.challenge,
+            "challenge"
+        );
+
+    if (
+        Array.isArray(
+            publicKeyOptions.allowCredentials
+        )
+    ) {
+      publicKeyOptions.allowCredentials =
+          publicKeyOptions.allowCredentials.map(
+              (credential, index) => {
+                if (!credential?.id) {
+                  throw new Error(
+                      `allowCredentials[${index}].id가 없습니다.`
+                  );
+                }
+
+                return {
+                  ...credential,
+                  id: base64UrlToArrayBuffer(
+                      credential.id,
+                      `allowCredentials[${index}].id`
+                  ),
+                  type:
+                      credential.type ||
+                      "public-key",
+                };
+              }
+          );
+    }
+
+    /*
+     * Firefox WebAuthn 호출 직전 실제 옵션 확인
+     */
+    console.log(
+        "WebAuthn publicKeyOptions:",
+        publicKeyOptions
+    );
+
+    console.log(
+        "WebAuthn 핵심 옵션:",
+        {
+          rpId: publicKeyOptions.rpId,
+          timeout: publicKeyOptions.timeout,
+          userVerification:
+          publicKeyOptions.userVerification,
+          allowCredentialsCount:
+              Array.isArray(
+                  publicKeyOptions.allowCredentials
+              )
+                  ? publicKeyOptions.allowCredentials.length
+                  : null,
+          challengeByteLength:
+          publicKeyOptions.challenge?.byteLength,
+        }
+    );
+
+    setStatus(
+        "Passkey 인증을 진행해주세요..."
+    );
+
+    /*
+     * 3. 브라우저 Passkey 인증
+     */
+    let assertion;
+
+    try {
+      assertion =
+          await navigator.credentials.get({
+            publicKey: publicKeyOptions,
+          });
+    } catch (webauthnError) {
+      console.error(
+          "navigator.credentials.get 실패:",
+          webauthnError
+      );
+
+      console.error(
+          "WebAuthn 오류 상세:",
+          {
+            name: webauthnError?.name,
+            message: webauthnError?.message,
+            stack: webauthnError?.stack,
+          }
+      );
+
+      throw webauthnError;
+    }
+
+    if (!assertion) {
+      throw new Error(
+          "Passkey 인증 결과를 받지 못했습니다."
+      );
+    }
+
+    /*
+     * challengeId 위치가 서버 구현마다 다를 수 있어
+     * 여러 형태를 대응
+     */
+    const challengeId =
+        startData.challengeId ??
+        startData.options?.challengeId ??
+        startData.publicKey?.challengeId ??
+        publicKeyOptions.challengeId;
+
+    if (!challengeId) {
+      console.error(
+          "challengeId 누락 응답:",
+          startData
+      );
+
+      throw new Error(
+          "서버 응답에 challengeId가 없습니다."
+      );
+    }
+
+    /*
+     * 4. Credential 직렬화
+     */
+    const credential = {
+      id: assertion.id,
+
+      rawId: arrayBufferToBase64Url(
+          assertion.rawId
+      ),
+
+      type: assertion.type,
+
+      response: {
+        authenticatorData:
+            arrayBufferToBase64Url(
+                assertion.response.authenticatorData
+            ),
+
+        clientDataJSON:
+            arrayBufferToBase64Url(
+                assertion.response.clientDataJSON
+            ),
+
+        signature:
+            arrayBufferToBase64Url(
+                assertion.response.signature
+            ),
+
+        userHandle:
+            assertion.response.userHandle
+                ? arrayBufferToBase64Url(
+                    assertion.response.userHandle
+                )
+                : null,
+      },
+
+      clientExtensionResults:
+          assertion.getClientExtensionResults(),
+    };
+
+    setStatus(
+        "서명 검증 중..."
+    );
+
+    /*
+     * 5. 로그인 검증 요청
+     */
+    const finishResponse = await fetch(
+        "/auth/login/finish",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json",
+          },
+
+          credentials: "include",
+
+          body: JSON.stringify({
+            username,
+            challengeId,
+            credential,
+          }),
+        }
+    );
+
+    let finishData;
+
+    try {
+      finishData =
+          await finishResponse.json();
+    } catch {
+      throw new Error(
+          `로그인 검증 응답을 읽을 수 없습니다. HTTP ${finishResponse.status}`
+      );
+    }
+
+    console.log(
+        "로그인 완료 응답:",
+        finishData
+    );
+
+    if (!finishResponse.ok) {
+      throw new Error(
+          finishData.error ||
+          finishData.message ||
+          `로그인 검증 실패 (HTTP ${finishResponse.status})`
+      );
+    }
+
+    /*
+     * 위험도에 따른 화면 처리
+     */
+    if (
+        finishData.riskAction === "BLOCKED"
+    ) {
+      setStatus(
+          finishData.message ||
+          "위험도가 높아 로그인이 차단되었습니다."
+      );
+
+      return;
+    }
+
+    if (
+        finishData.riskAction === "RE_AUTH" ||
+        finishData.requiresReauthentication
+    ) {
+      setStatus(
+          finishData.message ||
+          "추가 인증이 필요합니다."
+      );
+
+      return;
+    }
+
+    if (finishData.success) {
+      setStatus(
+          `로그인 성공 · 위험도: ${
+              finishData.riskLevel || "low"
+          } · 점수: ${
+              finishData.riskScore ?? 0
+          }`
+      );
+
+      /*
+       * 대시보드는 구현 제외로 확정했으므로
+       * dashboard.html로 이동하지 않는다.
+       */
+      return;
+    }
+
+    throw new Error(
+        finishData.message ||
+        "로그인에 실패했습니다."
+    );
   } catch (error) {
-    console.error('등록 오류:', error);
-    setStatus('오류 발생: ' + error.message);
+    console.error(
+        "로그인 오류:",
+        error
+    );
+
+    setStatus(
+        `오류 발생: ${error.message}`
+    );
   }
 }
+
+
+/*
+ * HTML에서 onclick="startPasskeyLogin()"으로
+ * 호출하는 경우를 위해 전역에 등록
+ */
+window.startPasskeyLogin =
+    startPasskeyLogin;
