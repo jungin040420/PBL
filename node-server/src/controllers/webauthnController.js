@@ -4,8 +4,7 @@ const sessionManager = require('../services/sessionManager');
 const crypto = require('crypto');
 const axios = require('axios');
 const { sendRiskData } = require('../services/riskService');
-const { redisClient } = require('../../config/db');
-const { db, authdb } = require('../../config/db');
+const { db, authdb, redisClient } = require('../../config/db');
 const { hashForCompare, hashUserId } = require('../utils/anonymize');
 const { encryptObject } = require('../utils/crypto');
 

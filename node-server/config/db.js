@@ -9,7 +9,7 @@ const db = mysql.createPool({
   database: process.env.DB_NAME,
 });
 
-const authDb = mysql.createPool({
+const authdb = mysql.createPool({
   host:     process.env.DB_HOST,
   user:     process.env.DB_USER,
   password: process.env.DB_PASSWORD,
@@ -69,4 +69,4 @@ const connectRedis = async () => {
 };
 connectRedis();
 
-module.exports = { db, mlPool, redisClient };
+module.exports = { db, authdb, mlPool, redisClient };
