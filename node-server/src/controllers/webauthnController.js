@@ -10,13 +10,6 @@ const { encryptObject } = require('../utils/crypto');
 
 console.log('sendRiskData 타입:', typeof sendRiskData);
 
-// function hashData(data) {
-//   return crypto
-//     .createHash('sha256')
-//     .update(String(data))
-//     .digest('hex');
-// }
-
 // 등록 - 1단계: challenge 생성
 exports.registerStart = async (req, res) => {
   try {
@@ -197,9 +190,6 @@ exports.loginFinish = async (req, res) => {
 
     console.log('verifyLogin 결과:', result);
 
-    context.signCountAbnormal = result.signCountAbnormal || false;
-    context.credentialMismatch = result.credentialMismatch || false;
-
     // 로그인 실패 시
     if (!result.verified) {
       const failUserIdHash = hashUserId(username);
@@ -228,6 +218,37 @@ exports.loginFinish = async (req, res) => {
       } catch (auditError) {
         console.error('[AUDIT_LOG_FAILURE] audit_logs 기록 실패(실패 이벤트):', auditError.message);
       }
+
+      context.signCountAbnormal = result.signCountAbnormal || false;
+      context.credentialMismatch = result.credentialMismatch || false;
+
+      const consecutiveFailureCount = parseInt(
+        await redisClient.get(`login:fail:${username}`)
+      ) || 0;
+      context.consecutiveFailureCount = consecutiveFailureCount;
+
+      const ipHash = hashForCompare(context.ip || '');
+      const isBlacklisted = await redisClient.get(`blacklist:ip:${ipHash}`);
+      context.blacklistIpDetected = isBlacklisted === '1';
+
+      if (consecutiveFailureCount >= 5) {
+        await redisClient.set(
+          `blacklist:ip:${ipHash}`,
+          '1',
+          { EX: 60 * 60 * 24 } // 24시간
+        );
+        context.blacklistIpDetected = true;
+      }
+
+      const [passkeyRows] = await db.query(
+        `SELECT p.id FROM passkeys p
+       JOIN users u ON p.user_id = u.id
+       WHERE u.username = ? AND p.credential_id = ?`,
+        [username, credential?.id]
+      );
+      const registeredPasskey = passkeyRows[0];
+      const currentType = credential.authenticatorAttachment || 'unknown';
+      context.authenticationMethodChanged = !registeredType || currentType === 'unknown';
 
       await redisClient.incr(`login:fail:${username}`);
       await redisClient.expire(`login:fail:${username}`, 3600);
