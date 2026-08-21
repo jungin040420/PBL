@@ -55,6 +55,8 @@ exports.registerFinish = async (req, res) => {
   const { username } = req.body;
   try {
     const { email, challengeId, credential } = req.body;
+    const context = req.context || {};
+
     // verificationService에서 서명 검증 및 DB 저장
     const result = await verificationService.verifyRegistration(
       username,
@@ -75,6 +77,7 @@ exports.registerFinish = async (req, res) => {
           'INSERT INTO mfa_db.audit_logs (event_type, payload) VALUES (?, ?)',
           ['REGISTER_FAIL', encryptObject({
             userIdHash: failUserIdHash,
+            deviceType: context.deviceInfo?.deviceType || 'unknown',
             result: 'fail',
             timestamp: new Date().toISOString(),
           })]
@@ -98,6 +101,7 @@ exports.registerFinish = async (req, res) => {
         'INSERT INTO mfa_db.audit_logs (event_type, payload) VALUES (?, ?)',
         ['REGISTER_SUCCESS', encryptObject({
           userIdHash,
+          deviceType: context.deviceInfo?.deviceType || 'unknown',
           result: 'success',
           timestamp: new Date().toISOString(),
         })]
