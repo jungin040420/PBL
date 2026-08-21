@@ -1,145 +1,240 @@
-
-
 services:
+  # ==========================================================
   # Node.js 서버
+  # ==========================================================
   node:
     build:
       context: ./node-server
       dockerfile: Dockerfile
+
     container_name: auth_node
+
     env_file:
       - .env.dev
+
     ports:
       - "3000:3000"
+
     environment:
       - NODE_ENV=development
+
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=authuser
       - MYSQL_PASSWORD=${DB_PASSWORD}
       - MYSQL_DATABASE=authdb
+
       - ML_DB_PORT=3306
       - ML_DB_USER=ml_writer
       - ML_DB_PASSWORD=${ML_WRITER_PASSWORD}
       - ML_DB_NAME=ml_db
+
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+
       - PYTHON_RISK_URL=http://python:8000
+
       - TZ=Asia/Seoul
+
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     volumes:
       - ./node-server:/app
       - /app/node_modules
-      - ./client:/app/client
+
+      # app.js에서 /client 경로를 사용하므로
+      # 로컬 client 폴더를 컨테이너 /client에 연결
+      - ./client:/client
+
     networks:
       - auth_network
-    restart: unless-stopped
-    
 
+    restart: unless-stopped
+
+
+  # ==========================================================
   # Python 리스크 계산 서버
+  # ==========================================================
   python:
     build:
       context: ./python-risk
       dockerfile: Dockerfile
+
     container_name: auth_python
+
     ports:
       - "8000:8000"
+
     environment:
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=ml_writer
       - DB_PASSWORD=${ML_WRITER_PASSWORD}
       - DB_NAME=ml_db
+
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - TZ=Asia/Seoul             
+
+      - TZ=Asia/Seoul
+
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     volumes:
       - ./python-risk:/app
+
     networks:
       - auth_network
+
     restart: unless-stopped
 
+
+  # ==========================================================
   # MySQL
+  # ==========================================================
   mysql:
     image: mysql:8.0
+
     container_name: auth_mysql
+
     env_file:
       - .env.dev
+
     command: --event-scheduler=ON
+
     ports:
       - "3307:3306"
+
     environment:
       - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
       - MYSQL_DATABASE=${DB_NAME}
       - MYSQL_USER=authuser
       - MYSQL_PASSWORD=${DB_PASSWORD}
       - TZ=Asia/Seoul
+
     volumes:
       - mysql_data:/var/lib/mysql
       - ./db:/docker-entrypoint-initdb.d
+
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD}"]
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-uroot",
+          "-p${DB_ROOT_PASSWORD}"
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
+
     networks:
       - auth_network
+
     restart: unless-stopped
 
+
+  # ==========================================================
   # Redis
+  # ==========================================================
   redis:
     image: redis:7.2
+
     container_name: auth_redis
+
     environment:
       - TZ=Asia/Seoul
+
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+    command:
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+
     volumes:
       - redis_data:/data
+
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+
     networks:
       - auth_network
+
     restart: unless-stopped
 
+
+  # ==========================================================
+  # Elasticsearch
+  # ==========================================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
+
     container_name: elasticsearch
+
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
+
     expose:
       - "9200"
+
     networks:
       - auth_network
+
     restart: unless-stopped
 
+
+  # ==========================================================
+  # Kibana
+  # ==========================================================
   kibana:
     image: docker.elastic.co/kibana/kibana:8.5.0
+
     container_name: kibana
+
     ports:
       - "5601:5601"
+
     networks:
       - auth_network
+
     restart: unless-stopped
+
+
+# ============================================================
+# Persistent volumes
+# ============================================================
 
 volumes:
   mysql_data:
   redis_data:
+
+
+# ============================================================
+# Network
+# ============================================================
 
 networks:
   auth_network:

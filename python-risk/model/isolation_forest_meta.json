@@ -1,7 +1,8 @@
 {
-  "model_type": "SYNTHETIC",
-  "training_rows": 200,
+  "model_type": "REAL",
+  "training_rows": 76,
   "contamination": 0.05,
+  "feature_count": 10,
   "feature_order": [
     "loginFrequency",
     "failedLoginCount",
@@ -11,6 +12,10 @@
     "regionChanged",
     "challengeResponseTime",
     "loginHour",
-    "dayOfWeek"
-  ]
+    "dayOfWeek",
+    "hasPreviousContext"
+  ],
+  "anomaly_score_type": "raw_score_samples",
+  "anomaly_score_description": "Isolation Forest score_samples() raw output. No 0-100 normalization.",
+  "trained_at": "2026-08-20T18:41:16.026726+00:00"
 }

@@ -32,11 +32,12 @@ const sendRiskData = async (
             context.country ??
             "KR",
 
-        // 현재 로그인 지역 자체
+        // 현재 로그인 지역
         loginRegion:
             context.country ??
             "KR",
 
+        // B - Behavior
         loginFrequency:
             context.loginFrequency ??
             0,
@@ -45,10 +46,24 @@ const sendRiskData = async (
             context.failedLoginCount ??
             0,
 
+        challengeResponseTime:
+            context.challengeResponseTime ??
+            null,
+
+        authenticationMethodChanged:
+            context.authenticationMethodChanged ??
+            false,
+
+        // N - Network
         ipChanged:
             context.ipChanged ??
             false,
 
+        regionChanged:
+            context.locationChanged ??
+            false,
+
+        // D - Device / Credential
         userAgentChanged:
             context.userAgentChanged ??
             false,
@@ -57,38 +72,31 @@ const sendRiskData = async (
             context.deviceChanged ??
             false,
 
-        regionChanged:
-            context.locationChanged ??
-            false,
-
-        // WebAuthn signCount 이상 여부
         signCountAbnormal:
             context.signCountAbnormal ??
             false,
 
-        // Credential 불일치 여부
         credentialMismatch:
             context.credentialMismatch ??
             false,
 
-        challengeResponseTime:
-            context.challengeResponseTime ??
-            null,
+        // T - Threat / History
+        consecutiveFailureCount:
+            context.consecutiveFailureCount ??
+            0,
 
+        blacklistIpDetected:
+            context.blacklistIpDetected ??
+            false,
+
+        // Time
         loginHour:
             now.getHours(),
 
         dayOfWeek:
             now.getDay(),
 
-        signCountAbnormal:
-            context.signCountAbnormal ??
-            false,
-
-        credentialMismatch:
-            context.credentialMismatch ??
-            false,
-        
+        // Context
         hasPreviousContext:
             context.hasPreviousContext ??
             false,
@@ -119,8 +127,17 @@ const sendRiskData = async (
             failedLoginCount:
             payload.failedLoginCount,
 
+            challengeResponseTime:
+            payload.challengeResponseTime,
+
+            authenticationMethodChanged:
+            payload.authenticationMethodChanged,
+
             ipChanged:
             payload.ipChanged,
+
+            regionChanged:
+            payload.regionChanged,
 
             userAgentChanged:
             payload.userAgentChanged,
@@ -128,23 +145,26 @@ const sendRiskData = async (
             isNewDevice:
             payload.isNewDevice,
 
-            regionChanged:
-            payload.regionChanged,
-
             signCountAbnormal:
             payload.signCountAbnormal,
 
             credentialMismatch:
             payload.credentialMismatch,
 
-            challengeResponseTime:
-            payload.challengeResponseTime,
+            consecutiveFailureCount:
+            payload.consecutiveFailureCount,
+
+            blacklistIpDetected:
+            payload.blacklistIpDetected,
 
             loginHour:
             payload.loginHour,
 
             dayOfWeek:
             payload.dayOfWeek,
+
+            hasPreviousContext:
+            payload.hasPreviousContext,
         }
     );
 
@@ -153,7 +173,7 @@ const sendRiskData = async (
         const response =
             await axios.post(
                 process.env.RISK_API_URL ||
-                "http://python:8000/analzye",
+                "http://python:8000/analyze",
 
                 payload,
 
