@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NEEDRESTART_MODE=a
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 RUN playwright install --with-deps chromium
