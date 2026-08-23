@@ -52,6 +52,12 @@ app.use(
     require('../routes/authRoutes')
 );
 
+// CASE 3 - 인증 성공 후 민감 행위 Risk Re-evaluation
+app.use(
+    '/api/sensitive',
+    require('../routes/sensitiveActionRoutes')
+);
+
 // 세션 확인
 app.get(
     '/api/me',
