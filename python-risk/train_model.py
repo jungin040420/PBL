@@ -29,35 +29,24 @@ from isolation_model import (  # noqa: E402
 
 DB_HOST = os.getenv(
     "ML_DB_HOST",
-    os.getenv(
-        "DB_HOST",
-        "localhost",
-    ),
+    os.getenv("DB_HOST", "localhost"),
 )
 
 DB_PORT = int(
     os.getenv(
         "ML_DB_PORT",
-        os.getenv(
-            "DB_PORT",
-            "3307",
-        ),
+        os.getenv("DB_PORT", "3307"),
     )
 )
 
 DB_USER = os.getenv(
     "ML_DB_USER",
-    os.getenv(
-        "DB_USER",
-        "ml_reader",
-    ),
+    os.getenv("DB_USER", "ml_reader"),
 )
 
 DB_PASSWORD = os.getenv(
     "ML_DB_PASSWORD",
-    os.getenv(
-        "DB_PASSWORD",
-    ),
+    os.getenv("DB_PASSWORD"),
 )
 
 DB_NAME = os.getenv(
@@ -66,22 +55,38 @@ DB_NAME = os.getenv(
 )
 
 
-# REAL 데이터 최소 학습 건수
 MIN_TRAINING_ROWS = 30
 
 
 # ============================================================
+# loginRegion 인코딩
+#
+# main.py와 반드시 동일한 기준 사용
+#
+# KR       -> 0
+# KR 이외  -> 1
+# ============================================================
+
+def encode_login_region(
+    login_region,
+) -> int:
+
+    if (
+        login_region
+        and str(login_region).upper() == "KR"
+    ):
+        return 0
+
+    return 1
+
+
+# ============================================================
 # MySQL REAL 학습 데이터 로드
+#
+# 최종 확정 Feature: 16개
 # ============================================================
 
 def load_training_data_from_mysql() -> np.ndarray:
-    """
-    ml_feature_logs 테이블에서
-    data_source='REAL' 데이터만 가져온다.
-
-    FEATURE_ORDER와 동일한 순서로
-    10개 Feature를 조회한다.
-    """
 
     if not DB_PASSWORD:
         raise RuntimeError(
@@ -91,6 +96,7 @@ def load_training_data_from_mysql() -> np.ndarray:
     connection = None
 
     try:
+
         connection = pymysql.connect(
             host=DB_HOST,
             port=DB_PORT,
@@ -101,111 +107,145 @@ def load_training_data_from_mysql() -> np.ndarray:
             connect_timeout=3,
         )
 
+        # ----------------------------------------------------
+        # 순서 중요
+        #
+        # 아래 SELECT 순서는 isolation_model.py의
+        # FEATURE_ORDER와 반드시 동일해야 한다.
+        # ----------------------------------------------------
+
         sql = """
             SELECT
-                login_frequency,
-                failed_login_count,
-                ip_changed,
-                user_agent_changed,
-                is_new_device,
-                region_changed,
-                COALESCE(
-                    challenge_response_time,
-                    0
-                ) AS challenge_response_time,
-                login_hour,
-                day_of_week,
-                has_previous_context
+                COALESCE(login_frequency, 0),
+                COALESCE(failed_login_count, 0),
+                COALESCE(challenge_response_time, 0),
+                COALESCE(authentication_method_changed, 0),
+                COALESCE(ip_changed, 0),
+                COALESCE(region_changed, 0),
+                COALESCE(sign_count_abnormal, 0),
+                COALESCE(credential_mismatch, 0),
+                COALESCE(user_agent_changed, 0),
+                COALESCE(is_new_device, 0),
+                COALESCE(consecutive_failure_count, 0),
+                COALESCE(blacklist_ip_detected, 0),
+                COALESCE(login_hour, 0),
+                COALESCE(day_of_week, 0),
+                login_region,
+                COALESCE(has_previous_context, 0)
             FROM ml_feature_logs
             WHERE data_source = 'REAL'
             ORDER BY event_id ASC
         """
 
         with connection.cursor() as cursor:
+
             cursor.execute(sql)
+
             rows = cursor.fetchall()
 
     finally:
+
         if connection is not None:
             connection.close()
 
+
     if not rows:
+
         raise ValueError(
             "ml_feature_logs에 REAL 학습 데이터가 없습니다."
         )
 
+
+    # --------------------------------------------------------
+    # loginRegion 문자열 -> 숫자 인코딩
+    #
+    # DB의 15번째 값(index 14)이 login_region
+    # --------------------------------------------------------
+
+    encoded_rows = []
+
+    for row in rows:
+
+        row = list(row)
+
+        row[14] = encode_login_region(
+            row[14]
+        )
+
+        encoded_rows.append(
+            row
+        )
+
+
     feature_matrix = np.array(
-        rows,
+        encoded_rows,
         dtype=float,
     )
 
+
+    # --------------------------------------------------------
+    # Matrix 검증
+    # --------------------------------------------------------
+
     if feature_matrix.ndim != 2:
+
         raise ValueError(
             "DB 학습 데이터가 2차원 Matrix가 아닙니다."
         )
 
+
     if feature_matrix.shape[1] != len(
         FEATURE_ORDER
     ):
+
         raise ValueError(
-            "DB Feature 개수와 FEATURE_ORDER가 일치하지 않습니다."
+            "DB Feature 개수와 FEATURE_ORDER가 "
+            "일치하지 않습니다."
         )
+
+
+    if feature_matrix.shape[1] != 16:
+
+        raise ValueError(
+            "최종 ML Feature는 반드시 16개여야 합니다."
+        )
+
 
     return feature_matrix
 
 
 # ============================================================
-# SYNTHETIC 테스트 데이터 생성
+# SYNTHETIC 테스트 데이터
+#
+# 실제 모델 학습용이 아님.
+# CI / ML 파이프라인 검증용.
+#
+# 역시 16 Feature 구조를 유지한다.
 # ============================================================
 
 def generate_synthetic_data(
     n: int = 200,
 ) -> np.ndarray:
-    """
-    CI / ML 파이프라인 검증용 합성 데이터.
-
-    주의:
-    이 데이터로 학습한 모델은
-    실제 로그인 위험 판정에 사용하지 않는다.
-    """
 
     rng = np.random.default_rng(42)
 
+
+    # 1
     login_frequency = rng.integers(
-        1,
+        0,
         8,
         size=n,
     )
 
+
+    # 2
     failed_login_count = rng.choice(
         [0, 0, 0, 0, 1, 2],
         size=n,
     )
 
-    ip_changed = rng.choice(
-        [0, 1],
-        size=n,
-        p=[0.9, 0.1],
-    )
 
-    user_agent_changed = rng.choice(
-        [0, 1],
-        size=n,
-        p=[0.9, 0.1],
-    )
-
-    is_new_device = rng.choice(
-        [0, 1],
-        size=n,
-        p=[0.9, 0.1],
-    )
-
-    region_changed = rng.choice(
-        [0, 1],
-        size=n,
-        p=[0.95, 0.05],
-    )
-
+    # 3
     challenge_response_time = rng.normal(
         1800,
         500,
@@ -218,40 +258,144 @@ def generate_synthetic_data(
         5000,
     )
 
-    login_hour = rng.integers(
-        7,
-        23,
+
+    # 4
+    authentication_method_changed = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.97, 0.03],
+    )
+
+
+    # 5
+    ip_changed = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.9, 0.1],
+    )
+
+
+    # 6
+    region_changed = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.95, 0.05],
+    )
+
+
+    # 7
+    sign_count_abnormal = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.98, 0.02],
+    )
+
+
+    # 8
+    credential_mismatch = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.97, 0.03],
+    )
+
+
+    # 9
+    user_agent_changed = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.9, 0.1],
+    )
+
+
+    # 10
+    is_new_device = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.9, 0.1],
+    )
+
+
+    # 11
+    consecutive_failure_count = rng.choice(
+        [0, 0, 0, 1, 2, 3],
         size=n,
     )
 
+
+    # 12
+    blacklist_ip_detected = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.99, 0.01],
+    )
+
+
+    # 13
+    login_hour = rng.integers(
+        0,
+        24,
+        size=n,
+    )
+
+
+    # 14
     day_of_week = rng.integers(
         0,
         7,
         size=n,
     )
 
-    # 대부분의 기존 사용자는 이전 Context가 존재하고,
-    # 일부는 신규 사용자 또는 이전 Context 미보유 상태로 가정
+
+    # 15
+    # KR=0 / 해외=1
+    login_region = rng.choice(
+        [0, 1],
+        size=n,
+        p=[0.95, 0.05],
+    )
+
+
+    # 16
     has_previous_context = rng.choice(
         [0, 1],
         size=n,
         p=[0.15, 0.85],
     )
 
-    return np.column_stack(
+
+    feature_matrix = np.column_stack(
         [
             login_frequency,
             failed_login_count,
+            challenge_response_time,
+            authentication_method_changed,
             ip_changed,
+            region_changed,
+            sign_count_abnormal,
+            credential_mismatch,
             user_agent_changed,
             is_new_device,
-            region_changed,
-            challenge_response_time,
+            consecutive_failure_count,
+            blacklist_ip_detected,
             login_hour,
             day_of_week,
+            login_region,
             has_previous_context,
         ]
     ).astype(float)
+
+
+    if feature_matrix.shape[1] != len(
+        FEATURE_ORDER
+    ):
+
+        raise ValueError(
+            "SYNTHETIC Feature 개수와 "
+            "FEATURE_ORDER가 일치하지 않습니다."
+        )
+
+
+    return feature_matrix
 
 
 # ============================================================
@@ -259,12 +403,17 @@ def generate_synthetic_data(
 # ============================================================
 
 def print_feature_order() -> None:
-    print("학습 Feature 순서:")
+
+    print(
+        f"학습 Feature 순서 "
+        f"(총 {len(FEATURE_ORDER)}개):"
+    )
 
     for index, feature_name in enumerate(
         FEATURE_ORDER,
         start=1,
     ):
+
         print(
             f"  {index}. {feature_name}"
         )
@@ -279,7 +428,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "ml_feature_logs REAL 데이터 기반 "
-            "Isolation Forest 학습"
+            "16 Feature Isolation Forest 학습"
         )
     )
 
@@ -324,8 +473,19 @@ def main() -> None:
 
 
     # --------------------------------------------------------
-    # Feature 순서 출력
+    # Feature 검증
     # --------------------------------------------------------
+
+    if len(FEATURE_ORDER) != 16:
+
+        print(
+            "[학습 중단] FEATURE_ORDER가 "
+            f"{len(FEATURE_ORDER)}개입니다. "
+            "최종 Feature는 반드시 16개여야 합니다."
+        )
+
+        sys.exit(1)
+
 
     print_feature_order()
 
@@ -342,17 +502,15 @@ def main() -> None:
             load_training_data_from_mysql()
         )
 
-        row_count = feature_matrix.shape[0]
+        row_count = (
+            feature_matrix.shape[0]
+        )
 
         print(
             f"MySQL REAL 학습 데이터: "
             f"{row_count}건"
         )
 
-
-        # ----------------------------------------------------
-        # REAL 데이터 최소 개수 검사
-        # ----------------------------------------------------
 
         if row_count < args.min_rows:
 
@@ -387,10 +545,6 @@ def main() -> None:
             sys.exit(1)
 
 
-        # ----------------------------------------------------
-        # 테스트 목적 SYNTHETIC 학습
-        # ----------------------------------------------------
-
         model_type = "SYNTHETIC"
 
         print(
@@ -403,7 +557,8 @@ def main() -> None:
         )
 
         print(
-            "이 모델은 실제 배포에 사용하면 안 됩니다."
+            "이 모델은 실제 로그인 위험 판정에 "
+            "사용하면 안 됩니다."
         )
 
         feature_matrix = (
@@ -412,13 +567,23 @@ def main() -> None:
 
 
     # --------------------------------------------------------
-    # 학습 데이터 확인
+    # 최종 Matrix 검증
     # --------------------------------------------------------
 
     print(
         "학습 Matrix shape:",
         feature_matrix.shape,
     )
+
+
+    if feature_matrix.shape[1] != 16:
+
+        print(
+            "[학습 중단] 학습 Matrix가 "
+            "16 Feature가 아닙니다."
+        )
+
+        sys.exit(1)
 
 
     # --------------------------------------------------------
@@ -441,7 +606,7 @@ def main() -> None:
 
 
     # --------------------------------------------------------
-    # 모델 Metadata 저장
+    # Metadata 저장
     # --------------------------------------------------------
 
     save_metadata(
@@ -452,7 +617,7 @@ def main() -> None:
 
 
     # --------------------------------------------------------
-    # 완료 로그
+    # 완료
     # --------------------------------------------------------
 
     print(
@@ -464,11 +629,23 @@ def main() -> None:
     )
 
     print(
-        f"모델 저장 완료: {MODEL_PATH}"
+        f"학습 행 수: "
+        f"{feature_matrix.shape[0]}"
     )
 
     print(
-        f"메타데이터 저장 완료: {MODEL_META_PATH}"
+        f"Feature 수: "
+        f"{feature_matrix.shape[1]}"
+    )
+
+    print(
+        f"모델 저장 완료: "
+        f"{MODEL_PATH}"
+    )
+
+    print(
+        f"메타데이터 저장 완료: "
+        f"{MODEL_META_PATH}"
     )
 
 

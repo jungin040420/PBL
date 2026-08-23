@@ -26,7 +26,7 @@ services:
 
       - ML_DB_PORT=3306
       - ML_DB_USER=ml_writer
-      - ML_DB_PASSWORD=${ML_WRITER_PASSWORD}
+      - ML_DB_PASSWORD=${ML_DB_PASSWORD}
       - ML_DB_NAME=ml_db
 
       - REDIS_HOST=redis
@@ -73,7 +73,7 @@ services:
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=ml_writer
-      - DB_PASSWORD=${ML_WRITER_PASSWORD}
+      - DB_PASSWORD=${ML_DB_PASSWORD}
       - DB_NAME=ml_db
 
       - REDIS_HOST=redis

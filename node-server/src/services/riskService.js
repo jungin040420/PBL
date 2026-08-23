@@ -178,7 +178,7 @@ const sendRiskData = async (
                 payload,
 
                 {
-                    timeout: 3000,
+                    timeout: 10000,
 
                     headers: {
                         "Content-Type":

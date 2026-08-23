@@ -23,9 +23,9 @@ app = FastAPI(
     title="Hybrid Risk Score API",
     description=(
         "Rule 기반 Risk Score와 Isolation Forest 이상 탐지를 이용해 "
-        "로그인 위험도를 분석하고 ML 학습 Feature를 저장합니다."
+        "로그인 위험도를 분석하고 ML Feature 및 Prediction을 저장합니다."
     ),
-    version="1.9.0",
+    version="2.0.0",
 )
 
 
@@ -96,10 +96,9 @@ print(
         "port": DB_PORT,
         "user": DB_USER,
         "database": DB_NAME,
-        "has_password":
-            bool(
-                DB_PASSWORD
-            ),
+        "has_password": bool(
+            DB_PASSWORD
+        ),
     }
 )
 
@@ -261,6 +260,14 @@ class RiskResponse(BaseModel):
 
 # ============================================================
 # Event ID
+#
+# 요청 1건당 딱 1번 생성한다.
+#
+# 동일 event_id를:
+# - ml_feature_logs
+# - ml_predictions
+# - risk_logs
+# 에 공통으로 사용한다.
 # ============================================================
 
 def generate_event_id() -> str:
@@ -273,11 +280,14 @@ def generate_event_id() -> str:
 
 
 # ============================================================
-# loginRegion ML encoding
+# loginRegion ML Encoding
 #
-# DB에는 KR 등 문자열 자체를 저장하지만,
-# Isolation Forest는 숫자 입력이 필요하므로
-# ML 입력 시 숫자로 변환한다.
+# DB:
+#   KR 등의 문자열 그대로 저장
+#
+# ML:
+#   KR = 0
+#   기타 = 1
 # ============================================================
 
 def encode_login_region(
@@ -296,38 +306,57 @@ def encode_login_region(
 
 
 # ============================================================
+# MySQL 연결 생성
+# ============================================================
+
+def create_ml_db_connection():
+
+    if not DB_PASSWORD:
+
+        raise RuntimeError(
+            "ML_DB_PASSWORD 또는 "
+            "DB_PASSWORD 환경변수가 없습니다."
+        )
+
+    return pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        charset="utf8mb4",
+        connect_timeout=5,
+        autocommit=True,
+    )
+
+
+# ============================================================
 # MySQL REAL Feature 저장
+#
+# event_id는 외부에서 전달받는다.
+# 새 event_id를 여기서 생성하지 않는다.
 # ============================================================
 
 def save_ml_feature_log(
     data: LogData,
+    event_id: str,
 ) -> None:
 
     if not DB_PASSWORD:
 
         print(
             "ML Feature MySQL 저장 건너뜀: "
-            "ML_DB_PASSWORD 또는 "
-            "DB_PASSWORD 환경변수가 없습니다."
+            "ML DB 비밀번호 환경변수가 없습니다."
         )
 
         return
 
     connection = None
 
-    event_id = generate_event_id()
-
     try:
 
-        connection = pymysql.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            charset="utf8mb4",
-            connect_timeout=5,
-            autocommit=True,
+        connection = (
+            create_ml_db_connection()
         )
 
         sql = """
@@ -446,7 +475,10 @@ def save_ml_feature_log(
             f"[REAL] event_id={event_id}"
         )
 
-    except pymysql.MySQLError as error:
+    except (
+        pymysql.MySQLError,
+        RuntimeError,
+    ) as error:
 
         print(
             "ML Feature MySQL 저장 실패:",
@@ -483,6 +515,143 @@ def save_ml_feature_log(
 
 
 # ============================================================
+# ML Prediction 저장
+#
+# ml_feature_logs와 같은 event_id를 사용한다.
+#
+# top_anomaly_features:
+# 현재 Isolation Forest에서 개별 Feature 기여도를
+# 직접 산출하지 않으므로 NULL로 저장한다.
+# ============================================================
+
+def save_ml_prediction(
+    event_id: str,
+    ml_result: dict,
+) -> None:
+
+    if not DB_PASSWORD:
+
+        print(
+            "ML Prediction MySQL 저장 건너뜀: "
+            "ML DB 비밀번호 환경변수가 없습니다."
+        )
+
+        return
+
+    if not ml_result.get(
+        "ml_model_used"
+    ):
+
+        print(
+            "ML Prediction MySQL 저장 건너뜀: "
+            "실제 ML 모델이 사용되지 않았습니다. "
+            f"event_id={event_id}"
+        )
+
+        return
+
+    anomaly_score = (
+        ml_result.get(
+            "ml_anomaly_score"
+        )
+    )
+
+    is_anomaly = (
+        ml_result.get(
+            "ml_is_anomaly"
+        )
+    )
+
+    model_type = (
+        ml_result.get(
+            "ml_model_type"
+        )
+    )
+
+    anomaly_label = (
+        "ANOMALY"
+        if is_anomaly is True
+        else "NORMAL"
+    )
+
+    # --------------------------------------------------------
+    # Metadata에서 model_version이 존재하면 사용하고,
+    # 없으면 현재 최종 16 Feature REAL 모델임을 나타내는
+    # fallback 버전을 사용한다.
+    # --------------------------------------------------------
+
+    model_version = (
+        ml_result.get(
+            "ml_model_version"
+        )
+        or "iforest-real-16f-v1"
+    )
+
+    connection = None
+
+    try:
+
+        connection = (
+            create_ml_db_connection()
+        )
+
+        sql = """
+            INSERT INTO ml_predictions (
+                event_id,
+                anomaly_score,
+                anomaly_label,
+                model_version,
+                top_anomaly_features
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+            )
+        """
+
+        values = (
+            event_id,
+            anomaly_score,
+            anomaly_label,
+            model_version,
+            None,
+        )
+
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                sql,
+                values,
+            )
+
+        print(
+            "ML Prediction MySQL 저장 성공 "
+            f"[{anomaly_label}] "
+            f"event_id={event_id} "
+            f"score={anomaly_score}"
+        )
+
+    except (
+        pymysql.MySQLError,
+        RuntimeError,
+    ) as error:
+
+        print(
+            "ML Prediction MySQL 저장 실패:",
+            error,
+        )
+
+    finally:
+
+        if connection is not None:
+
+            connection.close()
+
+
+# ============================================================
 # ML 추론
 # ============================================================
 
@@ -508,6 +677,9 @@ def run_ml_analysis(
             "ml_model_type":
                 None,
 
+            "ml_model_version":
+                None,
+
             "ml_anomaly_score":
                 None,
 
@@ -529,6 +701,9 @@ def run_ml_analysis(
             "ml_model_type":
                 None,
 
+            "ml_model_version":
+                None,
+
             "ml_anomaly_score":
                 None,
 
@@ -540,7 +715,17 @@ def run_ml_analysis(
         "model_type"
     )
 
+    model_version = (
+        metadata.get(
+            "model_version"
+        )
+        or "iforest-real-16f-v1"
+    )
+
+    # --------------------------------------------------------
     # SYNTHETIC 모델은 실제 로그인 판정에 사용하지 않는다.
+    # --------------------------------------------------------
+
     if model_type != "REAL":
 
         print(
@@ -556,6 +741,9 @@ def run_ml_analysis(
             "ml_model_type":
                 model_type,
 
+            "ml_model_version":
+                model_version,
+
             "ml_anomaly_score":
                 None,
 
@@ -564,7 +752,10 @@ def run_ml_analysis(
         }
 
     # ========================================================
-    # 최종 16개 ML Feature
+    # 최종 확정 16개 ML Feature
+    #
+    # isolation_model.py FEATURE_ORDER와
+    # 반드시 동일한 이름을 사용한다.
     # ========================================================
 
     features = {
@@ -622,7 +813,7 @@ def run_ml_analysis(
         "dayOfWeek":
             data.dayOfWeek,
 
-        # C
+        # Context
         "loginRegion":
             encode_login_region(
                 data.loginRegion
@@ -634,8 +825,10 @@ def run_ml_analysis(
 
     try:
 
-        result = predict_anomaly_score(
-            features
+        result = (
+            predict_anomaly_score(
+                features
+            )
         )
 
     except Exception as error:
@@ -651,6 +844,9 @@ def run_ml_analysis(
 
             "ml_model_type":
                 model_type,
+
+            "ml_model_version":
+                model_version,
 
             "ml_anomaly_score":
                 None,
@@ -673,6 +869,9 @@ def run_ml_analysis(
             "ml_model_type":
                 model_type,
 
+            "ml_model_version":
+                model_version,
+
             "ml_anomaly_score":
                 None,
 
@@ -685,6 +884,9 @@ def run_ml_analysis(
         {
             "model_type":
                 model_type,
+
+            "model_version":
+                model_version,
 
             "anomaly_score":
                 result[
@@ -705,6 +907,9 @@ def run_ml_analysis(
         "ml_model_type":
             model_type,
 
+        "ml_model_version":
+            model_version,
+
         "ml_anomaly_score":
             result[
                 "anomaly_score"
@@ -722,11 +927,15 @@ def run_ml_analysis(
 # ============================================================
 
 def save_risk_log(
+    event_id: str,
     data: LogData,
     risk_response: RiskResponse,
 ) -> None:
 
     log = {
+
+        "event_id":
+            event_id,
 
         "timestamp":
             datetime.now(
@@ -798,7 +1007,7 @@ def save_risk_log(
         "dayOfWeek":
             data.dayOfWeek,
 
-        # C
+        # Context
         "loginRegion":
             data.loginRegion,
 
@@ -920,10 +1129,22 @@ def read_root():
         "ml_feature_log":
             "MySQL ml_feature_logs",
 
+        "ml_prediction":
+            "MySQL ml_predictions",
+
         "ml_model_type":
             (
                 metadata.get(
                     "model_type"
+                )
+                if metadata
+                else None
+            ),
+
+        "ml_feature_count":
+            (
+                metadata.get(
+                    "feature_count"
                 )
                 if metadata
                 else None
@@ -1043,11 +1264,27 @@ def calculate_risk(
     data: LogData,
 ) -> RiskResponse:
 
+    # ========================================================
+    # 로그인 이벤트 ID
+    #
+    # 이 요청 전체에서 하나의 event_id만 사용한다.
+    # ========================================================
+
+    event_id = (
+        generate_event_id()
+    )
+
+    print(
+        "Risk Event 생성:",
+        event_id,
+    )
+
     score = 0
 
     triggers: List[str] = []
 
     feature_scores: Dict[str, int] = {}
+
 
     # ========================================================
     # 로그인 빈도
@@ -1061,7 +1298,9 @@ def calculate_risk(
 
     if login_frequency_score > 0:
 
-        score += login_frequency_score
+        score += (
+            login_frequency_score
+        )
 
         triggers.append(
             "HIGH_LOGIN_FREQUENCY"
@@ -1070,6 +1309,7 @@ def calculate_risk(
         feature_scores[
             "loginFrequency"
         ] = login_frequency_score
+
 
     # ========================================================
     # 로그인 실패
@@ -1083,7 +1323,9 @@ def calculate_risk(
 
     if login_failure_score > 0:
 
-        score += login_failure_score
+        score += (
+            login_failure_score
+        )
 
         triggers.append(
             "LOGIN_FAILURE"
@@ -1092,6 +1334,7 @@ def calculate_risk(
         feature_scores[
             "failedLoginCount"
         ] = login_failure_score
+
 
     # ========================================================
     # IP 변경
@@ -1111,6 +1354,7 @@ def calculate_risk(
             "ipChanged"
         ] = ip_score
 
+
     # ========================================================
     # User-Agent 변경
     # ========================================================
@@ -1119,7 +1363,9 @@ def calculate_risk(
 
         user_agent_score = 10
 
-        score += user_agent_score
+        score += (
+            user_agent_score
+        )
 
         triggers.append(
             "USER_AGENT_CHANGED"
@@ -1129,6 +1375,7 @@ def calculate_risk(
             "userAgentChanged"
         ] = user_agent_score
 
+
     # ========================================================
     # 신규 기기
     # ========================================================
@@ -1137,7 +1384,9 @@ def calculate_risk(
 
         device_score = 20
 
-        score += device_score
+        score += (
+            device_score
+        )
 
         triggers.append(
             "NEW_DEVICE"
@@ -1147,6 +1396,7 @@ def calculate_risk(
             "isNewDevice"
         ] = device_score
 
+
     # ========================================================
     # 지역 변경
     # ========================================================
@@ -1155,7 +1405,9 @@ def calculate_risk(
 
         region_score = 10
 
-        score += region_score
+        score += (
+            region_score
+        )
 
         triggers.append(
             "REGION_CHANGED"
@@ -1165,15 +1417,21 @@ def calculate_risk(
             "regionChanged"
         ] = region_score
 
+
     # ========================================================
     # 해외 접속
     # ========================================================
 
-    if data.country.upper() != "KR":
+    if (
+        data.country.upper()
+        != "KR"
+    ):
 
         country_score = 10
 
-        score += country_score
+        score += (
+            country_score
+        )
 
         triggers.append(
             "FOREIGN_COUNTRY"
@@ -1182,6 +1440,7 @@ def calculate_risk(
         feature_scores[
             "foreignCountry"
         ] = country_score
+
 
     # ========================================================
     # Challenge 응답 시간
@@ -1195,7 +1454,9 @@ def calculate_risk(
 
     if response_time_score > 0:
 
-        score += response_time_score
+        score += (
+            response_time_score
+        )
 
         triggers.append(
             "ABNORMAL_RESPONSE_TIME"
@@ -1205,15 +1466,22 @@ def calculate_risk(
             "challengeResponseTime"
         ] = response_time_score
 
+
     # ========================================================
     # 새벽 로그인
     # ========================================================
 
-    if 0 <= data.loginHour <= 5:
+    if (
+        0
+        <= data.loginHour
+        <= 5
+    ):
 
         odd_hour_score = 5
 
-        score += odd_hour_score
+        score += (
+            odd_hour_score
+        )
 
         triggers.append(
             "ODD_HOUR"
@@ -1222,6 +1490,7 @@ def calculate_risk(
         feature_scores[
             "loginHour"
         ] = odd_hour_score
+
 
     # ========================================================
     # Rule Score 제한
@@ -1235,13 +1504,17 @@ def calculate_risk(
         ),
     )
 
+
     # ========================================================
     # Isolation Forest
     # ========================================================
 
-    ml_result = run_ml_analysis(
-        data
+    ml_result = (
+        run_ml_analysis(
+            data
+        )
     )
+
 
     if (
         ml_result[
@@ -1255,7 +1528,9 @@ def calculate_risk(
 
         ml_risk_score = 20
 
-        score += ml_risk_score
+        score += (
+            ml_risk_score
+        )
 
         score = min(
             score,
@@ -1270,6 +1545,7 @@ def calculate_risk(
             "mlAnomaly"
         ] = ml_risk_score
 
+
     # ========================================================
     # 최종 인증 정책
     # ========================================================
@@ -1278,15 +1554,19 @@ def calculate_risk(
         risk_level,
         authentication_action,
         message,
-    ) = determine_authentication_policy(
-        score
+    ) = (
+        determine_authentication_policy(
+            score
+        )
     )
+
 
     if not triggers:
 
         triggers.append(
             "NO_RISK_DETECTED"
         )
+
 
     # ========================================================
     # Response
@@ -1341,26 +1621,50 @@ def calculate_risk(
             ],
     )
 
+
     # ========================================================
     # REAL Feature 저장
+    #
+    # 동일 event_id 사용
     # ========================================================
 
     save_ml_feature_log(
-        data
+        data,
+        event_id,
     )
+
+
+    # ========================================================
+    # ML Prediction 저장
+    #
+    # 동일 event_id 사용
+    # ========================================================
+
+    save_ml_prediction(
+        event_id,
+        ml_result,
+    )
+
 
     # ========================================================
     # Risk 로그
+    #
+    # 동일 event_id 사용
     # ========================================================
 
     save_risk_log(
+        event_id,
         data,
         risk_response,
     )
 
+
     print(
         "Risk 분석 완료:",
         {
+            "event_id":
+                event_id,
+
             "risk_score":
                 score,
 
@@ -1373,6 +1677,21 @@ def calculate_risk(
             "ml_model_used":
                 ml_result[
                     "ml_model_used"
+                ],
+
+            "ml_model_type":
+                ml_result[
+                    "ml_model_type"
+                ],
+
+            "ml_anomaly_score":
+                ml_result[
+                    "ml_anomaly_score"
+                ],
+
+            "ml_is_anomaly":
+                ml_result[
+                    "ml_is_anomaly"
                 ],
         }
     )

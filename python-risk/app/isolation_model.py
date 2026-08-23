@@ -38,29 +38,57 @@ MODEL_META_PATH = os.path.join(
 #
 # 학습 / 추론에서 반드시 동일한 순서를 사용한다.
 #
-# Feature Freeze 기준:
+# 최종 Feature Freeze 기준: 총 16개
+#
+# B - Behavior
 # 1. loginFrequency
 # 2. failedLoginCount
-# 3. ipChanged
-# 4. userAgentChanged
-# 5. isNewDevice
+# 3. challengeResponseTime
+# 4. authenticationMethodChanged
+#
+# N - Network
+# 5. ipChanged
 # 6. regionChanged
-# 7. challengeResponseTime
-# 8. loginHour
-# 9. dayOfWeek
-# 10. hasPreviousContext
+#
+# D - Device / Credential
+# 7. signCountAbnormal
+# 8. credentialMismatch
+# 9. userAgentChanged
+# 10. isNewDevice
+#
+# T - Threat / History
+# 11. consecutiveFailureCount
+# 12. blacklistIpDetected
+#
+# Time
+# 13. loginHour
+# 14. dayOfWeek
+#
+# Context
+# 15. loginRegion
+# 16. hasPreviousContext
+#
+# 주의:
+# loginRegion은 main.py에서 encode_login_region()을 통해
+# KR=0 / KR 이외=1 숫자값으로 변환한 뒤 전달한다.
 # ============================================================
 
 FEATURE_ORDER = [
     "loginFrequency",
     "failedLoginCount",
+    "challengeResponseTime",
+    "authenticationMethodChanged",
     "ipChanged",
+    "regionChanged",
+    "signCountAbnormal",
+    "credentialMismatch",
     "userAgentChanged",
     "isNewDevice",
-    "regionChanged",
-    "challengeResponseTime",
+    "consecutiveFailureCount",
+    "blacklistIpDetected",
     "loginHour",
     "dayOfWeek",
+    "loginRegion",
     "hasPreviousContext",
 ]
 
@@ -332,7 +360,6 @@ def validate_metadata(
 ) -> None:
 
     if not metadata:
-
         return
 
     metadata_feature_order = (
@@ -379,19 +406,15 @@ def validate_metadata(
 # ============================================================
 # Isolation Forest 추론
 #
-# 중요:
+# anomaly_score:
+# sklearn IsolationForest score_samples()의
+# 원시 반환값을 그대로 사용한다.
 #
-# anomaly_score는 sklearn IsolationForest의
-# score_samples() 원시 반환값을 그대로 사용한다.
-#
-# 0~100 정규화를 수행하지 않는다.
-#
-# score_samples() 값은 고정된 -1~1 범위를 보장하지 않으므로
-# DB / 문서에서도 단순 FLOAT 원시 모델 점수로 관리한다.
+# 0~100 정규화하지 않는다.
 #
 # model.predict():
-#    1  = 정상
-#   -1  = 이상치
+#    1 = 정상
+#   -1 = 이상치
 # ============================================================
 
 def predict_anomaly_score(
@@ -421,13 +444,6 @@ def predict_anomaly_score(
     prediction = model.predict(
         feature_vector
     )[0]
-
-    # --------------------------------------------------------
-    # 원시 Isolation Forest 점수
-    #
-    # 절대 0~100으로 변환하지 않는다.
-    # DB ml_predictions.anomaly_score에도 이 값을 그대로 사용한다.
-    # --------------------------------------------------------
 
     raw_anomaly_score = model.score_samples(
         feature_vector
