@@ -7,7 +7,7 @@
 --             F-09 v2.0 §3   (보존기간·파기)
 -- 담당자     : 윤정인
 -- 작성일     : 2026.07.29
--- 수정일     : 2026.08.18
+-- 수정일     : 2026.08.23
 --
 -- [적용 방법]
 --   (A) docker-compose mysql 서비스에
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS ml_feature_logs (
     COMMENT '0/1. 이전 로그인 대비 User-Agent 변경 여부',
 
     is_new_device                 TINYINT(1)   NULL
-    COMMENT '0/1. 신규 Device 여부. 0=기존 기기, 1=신규 기기',
+    COMMENT '0/1. 직전 로그인 Context 대비 기기 변경 여부. 0=변경 없음 또는 이전 Context 없음, 1=직전 로그인 대비 기기 변경 감지',
 
 
     -- ================================================================
