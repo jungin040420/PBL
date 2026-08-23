@@ -33,7 +33,7 @@ services:
       - REDIS_PORT=6379
 
       - PYTHON_RISK_URL=http://python:8000
-
+      - ML_SERVICE_URL=http://ml-service:8001
       - TZ=Asia/Seoul
 
     depends_on:
@@ -96,6 +96,45 @@ services:
     restart: unless-stopped
 
 
+  # ==========================================================
+  # ML 서비스 (Playwright)
+  # ==========================================================
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+
+    container_name: ml_service
+
+    ports:
+      - "8001:8001"
+
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=ml_writer
+      - DB_PASSWORD=${ML_DB_PASSWORD}
+      - DB_NAME=ml_db
+
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      - TZ=Asia/Seoul
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    volumes:
+      - ./ml-service:/app
+
+    networks:
+      - auth_network
+
+    restart: unless-stopped
+    
   # ==========================================================
   # MySQL
   # ==========================================================
@@ -239,3 +278,4 @@ volumes:
 networks:
   auth_network:
     driver: bridge
+

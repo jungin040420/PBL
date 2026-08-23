@@ -1,9 +1,8 @@
-FROM python:3.12-slim
-
+FROM python:3.11-slim
 WORKDIR /app
-
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+RUN playwright install --with-deps chromium
 COPY . .
-
 EXPOSE 8001
-
-CMD ["python", "main.py"]
+CMD ["uvicorn", "urlcheck_api:app", "--host", "0.0.0.0", "--port", "8001"]
