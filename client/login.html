@@ -1,76 +1,56 @@
 <!-- 로그인 페이지 -->
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
   <meta charset="UTF-8" />
 
-  <meta
-          name="viewport"
-          content="width=device-width, initial-scale=1.0"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
   <title>로그인</title>
 
-  <link
-          rel="stylesheet"
-          href="/css/style.css"
-  />
+  <link rel="stylesheet" href="./cs/style.css" />
 </head>
 
 <body>
 
-<div class="card">
+  <div class="card">
 
-  <h2>로그인</h2>
+    <h2>로그인</h2>
 
-  <div class="field">
+    <div id="loginFormArea">
+      <div class="field">
+        <label for="username">사용자 아이디</label>
+        <input type="text" id="username" autocomplete="username webauthn" />
+      </div>
+    </div>
 
-    <label for="username">
-      사용자 아이디
-    </label>
+    <div id="status">
+      Passkey 로그인을 진행해주세요.
+    </div>
 
-    <input
-            type="text"
-            id="username"
-            autocomplete="username webauthn"
-    />
+    <div id="authBtnGroup">
+      <button type="button" id="loginBtn" onclick="startPasskeyLogin()">
+        Passkey로 로그인
+      </button>
+      <button type="button" class="btn-secondary" onclick="location.href='/register.html'">
+        회원가입
+      </button>
+    </div>
+
+    <button type="button" id="logoutBtn" class="btn-danger" onclick="startLogout()" style="display: none;">
+        로그아웃
+      </button>
+    </div>
 
   </div>
+
+
+  <!-- Passkey 로그인 로직 -->
+  <script src="/js/login.js"></script>
+
 
   <!--
-    현재 ML / Passkey 검증 단계에서는
-    사이트 검사와 로그인 버튼을 연결하지 않는다.
-
-    AI 피싱 사이트 검사는 이후 별도 기능으로
-    정상 연동한 뒤 다시 적용한다.
-  -->
-  <div id="status">
-    Passkey 로그인을 진행해주세요.
-  </div>
-
-  <button
-          type="button"
-          id="loginBtn"
-          onclick="startPasskeyLogin()"
-  >
-    Passkey로 로그인
-  </button>
-
-  <button
-          type="button"
-          onclick="location.href='/register.html'"
-  >
-    회원가입
-  </button>
-
-</div>
-
-
-<!-- Passkey 로그인 로직 -->
-<script src="/js/login.js"></script>
-
-
-<!--
 ============================================================
 AI 사이트 검사 기능
 
@@ -177,4 +157,5 @@ window.addEventListener(
 -->
 
 </body>
+
 </html>
