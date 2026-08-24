@@ -1,0 +1,173 @@
+/* 1. 기본 리셋 및 전체 배경 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: #f4f6f8;
+  color: #333333;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+/* 2. 페이지 바깥 레이아웃 (.page) */
+.page {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* 상단 로고 및 서비스 제목 */
+.logo h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #2563eb;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+/* 3. 카드 컨테이너 (.card) */
+.card {
+  background: #ffffff;
+  padding: 32px 28px;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-align: center;
+  color: #111827;
+}
+
+.card > p {
+  font-size: 0.875rem;
+  color: #6b7280;
+  text-align: center;
+  margin-top: -8px;
+  margin-bottom: 4px;
+}
+
+/* 4. 입력 필드 그룹 (.field) */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.field input {
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.field input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+/* 5. 상태 메시지 (#status) */
+#status {
+  font-size: 0.875rem;
+  color: #4b5563;
+  text-align: center;
+  min-height: 20px;
+  line-height: 1.4;
+}
+
+/* 6. 버튼 공통 및 주요/보조 버튼 */
+button {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s, opacity 0.2s;
+}
+
+button:disabled {
+  background-color: #e5e7eb !important;
+  color: #9ca3af !important;
+  cursor: not-allowed;
+}
+
+/* 주 행동 버튼 (로그인 버튼 & 등록 버튼) */
+#loginBtn,
+#btn-passkey {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
+#loginBtn:hover:not(:disabled),
+#btn-passkey:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+
+/* 보조 버튼 (회원가입 이동 버튼 등) */
+button[onclick*="register"] {
+  background-color: #f3f4f6;
+  color: #374151;
+}
+
+button[onclick*="register"]:hover {
+  background-color: #e5e7eb;
+}
+
+/* 7. 하단 안내 텍스트 및 링크 */
+.page > p {
+  font-size: 0.875rem;
+  color: #6b7280;
+  text-align: center;
+}
+
+.page > p a {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.page > p a:hover {
+  text-decoration: underline;
+}
+
+#authBtnGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+/* 빨간색 강조 로그아웃 버튼 */
+.btn-danger {
+  background-color: #ef4444 !important;
+  color: #ffffff !important;
+}
+
+.btn-danger:hover {
+  background-color: #dc2626 !important;
+}
