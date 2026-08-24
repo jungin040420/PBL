@@ -181,7 +181,7 @@ exports.loginFinish = async (req, res) => {
                 await db.query(
                     'INSERT INTO mfa_db.audit_logs (event_type, payload) VALUES (?, ?)',
                     ['LOGIN_FAIL', encryptObject({
-                        userIdHash: hashUserId(username),
+                        userIdHash: failUserIdHash,
                         deviceType: context.deviceInfo?.deviceType || 'unknown',
                         result: 'fail',
                         reason: result.reason || 'VERIFICATION_FAILED',
@@ -222,7 +222,7 @@ exports.loginFinish = async (req, res) => {
                     WHERE u.username = ? AND p.credential_id = ? AND p.is_active = 1 LIMIT 1`,
                     [username, credential?.id || '']
                 );
-                registeredType = passkeyRows?.[0] || null;
+                registeredPasskey = passkeyRows?.[0] || null;
             } catch (passkeyError) {
                 console.error('등록 Passkey 확인 실패:', passkeyError.message);
             }
