@@ -1,111 +1,176 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 
-from url_predict import load_artifacts, predict_url
+import asyncio
+import os
+import joblib
+import numpy as np
+import pandas as pd
 
+from playwright.async_api import async_playwright
+
+from url_feature_extractor import extract_features
 
 app = FastAPI(
-    title="AI URL Checker",
-    description="URL + DOM 기반 피싱 사이트 탐지 API",
-    version="1.0.0"
+    title="AI URL Checker"
 )
 
-
-# ============================================================
+####################################################
 # 모델 로드
-# ============================================================
+####################################################
 
-try:
+OUTPUT_DIR = "output"
 
-    artifacts = load_artifacts()
+model = joblib.load(
+    os.path.join(OUTPUT_DIR, "rf_model.pkl")
+)
 
-    print("✅ AI 모델 로드 완료")
+scaler = joblib.load(
+    os.path.join(OUTPUT_DIR, "scaler.pkl")
+)
 
-except Exception as e:
+scale_cols = joblib.load(
+    os.path.join(OUTPUT_DIR, "scale_cols.pkl")
+)
 
-    artifacts = None
+selected_features = joblib.load(
+    os.path.join(OUTPUT_DIR, "selected_features.pkl")
+)
 
-    print("❌ AI 모델 로드 실패")
-    print(e)
+log_cols = joblib.load(
+    os.path.join(OUTPUT_DIR, "log_cols.pkl")
+)
 
+clip_upper = joblib.load(
+    os.path.join(OUTPUT_DIR, "clip_upper.pkl")
+)
 
-# ============================================================
-# 요청 데이터
-# ============================================================
+####################################################
+# 요청 모델
+####################################################
 
 class CheckRequest(BaseModel):
-
     url: str
 
+####################################################
+# Feature -> DataFrame
+####################################################
 
-# ============================================================
-# 기본 API
-# ============================================================
+def build_feature_row(raw_feature):
+
+    row = {
+        feature: raw_feature.get(feature, 0)
+        for feature in selected_features
+    }
+
+    X = pd.DataFrame([row])
+
+    # log1p
+    for col in log_cols:
+        if col in X.columns:
+            X[col] = np.log1p(
+                X[col].clip(lower=0)
+            )
+
+    # clipping
+    for col, upper in clip_upper.items():
+        if col in X.columns:
+            X[col] = X[col].clip(
+                upper=upper
+            )
+
+    # scaling
+    X[scale_cols] = scaler.transform(
+        X[scale_cols]
+    )
+
+    return X
+
+####################################################
+# URL 검사
+####################################################
+
+async def analyze_url(url):
+
+    async with async_playwright() as p:
+
+        browser = await p.chromium.launch(
+            headless=True
+        )
+
+        context = await browser.new_context(
+            ignore_https_errors=True
+        )
+
+        page = await context.new_page()
+
+        try:
+
+            ################################################
+            # Feature 추출
+            ################################################
+
+            raw_feature = await extract_features(
+                url,
+                page
+            )
+
+        finally:
+
+            await context.close()
+            await browser.close()
+
+    ####################################################
+    # DataFrame 생성
+    ####################################################
+
+    X = build_feature_row(raw_feature)
+
+    ####################################################
+    # 머신러닝 예측
+    ####################################################
+
+    probability = model.predict_proba(X)[0][1]
+
+    prediction = int(probability >= 0.5)
+
+    return {
+
+        "prediction": prediction,
+
+        "probability": float(probability)
+
+    }
+
+####################################################
+# API
+####################################################
 
 @app.get("/")
 def root():
 
     return {
-        "status": "running",
-        "message": "AI URL Checker",
-        "api": "/check"
+
+        "message": "AI URL Checker"
+
     }
 
-
-# ============================================================
-# URL 검사 API
-# ============================================================
+####################################################
+# login.html에서 호출
+####################################################
 
 @app.post("/check")
 async def check(req: CheckRequest):
 
-    # --------------------------------------------------------
-    # 모델 확인
-    # --------------------------------------------------------
-
-    if artifacts is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="AI 모델이 로드되지 않았습니다."
-        )
-
-
-    # --------------------------------------------------------
-    # URL 검사
-    # --------------------------------------------------------
-
-    try:
-
-        result = await predict_url(
-            req.url,
-            artifacts
-        )
-
-    except Exception as e:
-
-        print("❌ URL 검사 실패:", e)
-
-        raise HTTPException(
-            status_code=500,
-            detail=f"URL 검사 실패: {str(e)}"
-        )
-
-
-    # --------------------------------------------------------
-    # 결과
-    # --------------------------------------------------------
+    result = await analyze_url(req.url)
 
     return {
 
-        "url": req.url,
-
         "blocked": result["prediction"] == 1,
 
-        "prediction": result["prediction"],
-
-        "probability": result["prob"],
-
-        "verdict": result["verdict"]
+        "probability": round(
+            result["probability"],
+            4
+        )
 
     }
