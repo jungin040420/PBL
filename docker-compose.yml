@@ -203,7 +203,7 @@ services:
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-
+    
     volumes:
       - redis_data:/data
 
