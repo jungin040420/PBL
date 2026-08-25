@@ -2,7 +2,7 @@
 -- 04_purge_event.sql
 -- MySQL Event Scheduler 자동 파기 Event 등록
 --
--- 근거 문서 : F-09 v2.0 §3 「Event Scheduler 실행 주기 및 파기 쿼리 정의」
+-- 근거 문서 : F-09 v2.2 §3 「Event Scheduler 실행 주기 및 파기 쿼리 정의」
 --
 --             audit_logs
 --               : 매일 새벽 2시
@@ -23,7 +23,7 @@
 --
 -- 담당자     : 윤정인
 -- 작성일     : 2026.07.29
--- 수정일     : 2026.08.18
+-- 수정일     : 2026.08.25
 --
 -- [실행 순서]
 --   01_init.sql
@@ -104,7 +104,7 @@ CREATE EVENT ev_purge_ml_feature_logs
     )
 
   COMMENT
-    'F-09 v2.0: ml_feature_logs REAL 데이터 90일 Sliding Window 파기. 매일 02:00'
+    'F-09 v2.2: ml_feature_logs REAL 데이터 90일 Sliding Window 파기. 매일 02:00'
 
   DO
 
@@ -140,7 +140,7 @@ CREATE EVENT ev_purge_ml_predictions
     )
 
   COMMENT
-    'F-09 v2.0: ml_predictions 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: ml_predictions 1년 보존 후 파기. 매일 02:00'
 
   DO
 
@@ -177,7 +177,7 @@ CREATE EVENT mfa_db.ev_purge_audit_logs
     )
 
   COMMENT
-    'F-09 v2.0: audit_logs 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: audit_logs 1년 보존 후 파기. 매일 02:00'
 
   DO
 
@@ -241,7 +241,7 @@ CREATE EVENT ev_purge_risk_scores
     )
 
   COMMENT
-    'F-09 v2.0: risk_scores 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: risk_scores 1년 보존 후 파기. 매일 02:00'
 
   DO
 
@@ -356,7 +356,7 @@ WHERE created_at
 -- =====================================================================
 -- 7. 삭제 건수 감사 로그
 --
--- F-09 v2.0 §3은 Event Scheduler 실행 후
+-- F-09 v2.2 §3은 Event Scheduler 실행 후
 -- 삭제 건수를 F-06 감사 로그에 기록하도록 정의하고 있다.
 --
 -- 본 프로젝트에서는 개발 일정상 구현 범위에서 제외한다.

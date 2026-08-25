@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 
 /**
- * F-08 개인정보 비식별화 처리 규칙 정의서 v2.1 구현
+ * F-08 개인정보 비식별화 처리 규칙 정의서 v2.5 구현
  *
  * 규칙 1: IP 주소       → SHA-256 + 랜덤 Salt (레코드마다 새 Salt)
  * 규칙 2: 기기 ID       → SHA-256 + 랜덤 Salt (레코드마다 새 Salt)
@@ -101,10 +101,11 @@ const hashUserId = (userId) => {
 
 /**
  * 비교·조회 전용 해시 (ipChanged / userAgentChanged / regionChanged 산출용, ipHash)
- * - F-08 v2.1 규칙 6 / §5 예외 조항: 비교·조회가 유일한 목적인 값에 고정 Salt를 허용
+ * - F-08 v2.5 규칙 6 / §5 예외 조항: 비교·조회가 유일한 목적인 값에 고정 Salt를 허용
  * - 랜덤 Salt는 동일 입력도 매번 다른 해시가 나와 직전 값과 비교가 불가능하다
- * - 저장 허용 위치는 Redis lastcontext:{userIdHash} 키와 Elasticsearch risk-logs
- *   인덱스(및 동일 로그를 기록하는 파일 저장소)뿐이며, 그 외 저장소에 기록하지 않는다
+ * - 저장 허용 위치는 Redis lastcontext:{userIdHash} 키, Redis blacklist:ip:{ipHash} 키,
+ *   Elasticsearch risk-logs 인덱스(및 동일 로그를 기록하는 파일 저장소)뿐이며,
+ *   그 외 저장소에 기록하지 않는다
  * - lastcontext 는 비교 후 현재 값으로 덮어쓰며 TTL 30일 (F-08 §6)
  * - ML에 전달하는 값은 비교 결과(0/1)뿐이며 해시값 자체는 전달하지 않는다 (규칙 6 활용 목적)
  * - 고정 Salt는 6개월 주기 또는 유출 시 즉시 로테이션한다 (규칙 6 주의사항)
