@@ -7,7 +7,7 @@ const { verifyChallenge } = require('./challenge');
 
 const rpID = process.env.RP_ID || 'localhost';
 
-exports.verifyRegistration = async (username, email, challengeId, credential) => {
+exports.verifyRegistration = async (username, email, challengeId, credential, authenticatorAttachment) => {
 
   const clientDataJSON = JSON.parse(
     Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8')
@@ -73,13 +73,14 @@ exports.verifyRegistration = async (username, email, challengeId, credential) =>
 
   await db.query(
     `INSERT INTO passkeys 
-     (user_id, credential_id, public_key, counter)
-     VALUES (?, ?, ?, ?)`,
+     (user_id, credential_id, public_key, counter, authenticator_type)
+     VALUES (?, ?, ?, ?, ?)`,
     [
       userId,
       credentialID,
       Buffer.from(credentialPublicKey).toString('base64url'),
       counter,
+      authenticatorAttachment || 'unknown',
     ]
   );
 

@@ -34,11 +34,11 @@ exports.registerStart = async (req, res) => {
 exports.registerFinish = async (req, res) => {
     const { username } = req.body;
     try {
-        const { email, challengeId, credential } = req.body;
+        const { email, challengeId, credential, authenticatorAttachment } = req.body;
         const context = req.context || {};
 
         const result = await verificationService.verifyRegistration(
-            username, email, challengeId, credential
+            username, email, challengeId, credential, authenticatorAttachment
         );
 
         if (!result.verified) {
