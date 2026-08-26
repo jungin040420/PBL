@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import asyncio
@@ -13,6 +14,22 @@ from url_feature_extractor import extract_features
 
 app = FastAPI(
     title="AI URL Checker"
+)
+
+####################################################
+# CORS 설정
+#   - 프론트엔드(index.html)가 API와 다른 포트/도메인에서
+#     서빙되는 경우 브라우저가 요청을 막는 것을 방지.
+#   - 운영 환경에서는 allow_origins를 실제 프론트 주소로
+#     제한하는 것을 권장 (예: ["http://13.193.119.242:3000"])
+####################################################
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 ####################################################
@@ -46,11 +63,22 @@ clip_upper = joblib.load(
 )
 
 ####################################################
+# 판정 임계값 (predict.py와 동일한 기준으로 통일)
+####################################################
+
+MALICIOUS_THRESHOLD = 0.90
+SUSPICIOUS_THRESHOLD = 0.70
+
+####################################################
 # 요청 모델
 ####################################################
 
 class CheckRequest(BaseModel):
     url: str
+
+class LoginRequest(BaseModel):
+    id: str
+    password: str
 
 ####################################################
 # Feature -> DataFrame
@@ -85,6 +113,30 @@ def build_feature_row(raw_feature):
     )
 
     return X
+
+####################################################
+# 판정 로직 (3단계: Malicious / Suspicious / Legitimate)
+####################################################
+
+def classify(probability: float):
+
+    if probability >= MALICIOUS_THRESHOLD:
+        return {
+            "blocked": True,
+            "verdict": "Malicious",
+        }
+
+    elif probability >= SUSPICIOUS_THRESHOLD:
+        return {
+            "blocked": False,
+            "verdict": "Suspicious",
+        }
+
+    else:
+        return {
+            "blocked": False,
+            "verdict": "Legitimate",
+        }
 
 ####################################################
 # URL 검사
@@ -130,17 +182,9 @@ async def analyze_url(url):
     # 머신러닝 예측
     ####################################################
 
-    probability = model.predict_proba(X)[0][1]
+    probability = float(model.predict_proba(X)[0][1])
 
-    prediction = int(probability >= 0.5)
-
-    return {
-
-        "prediction": prediction,
-
-        "probability": float(probability)
-
-    }
+    return probability
 
 ####################################################
 # API
@@ -162,15 +206,44 @@ def root():
 @app.post("/check")
 async def check(req: CheckRequest):
 
-    result = await analyze_url(req.url)
+    probability = await analyze_url(req.url)
+
+    result = classify(probability)
 
     return {
 
-        "blocked": result["prediction"] == 1,
+        "url": req.url,
 
-        "probability": round(
-            result["probability"],
-            4
-        )
+        "blocked": result["blocked"],
 
+        "verdict": result["verdict"],
+
+        "prediction": int(result["blocked"]),
+
+        "probability": round(probability, 4),
+
+    }
+
+####################################################
+# 로그인 처리
+#   - predict.py / login_server()가 호출하는 LOGIN_API가
+#     이 엔드포인트를 가리키도록 통일 (기존에는 /login이
+#     존재하지 않아 항상 404가 발생했음)
+#   - 데모 목적의 최소 구현이며, 실제 서비스에서는 반드시
+#     DB 조회 + 비밀번호 해시 검증 로직으로 교체할 것
+####################################################
+
+@app.post("/login")
+async def login(req: LoginRequest):
+
+    # TODO: 실제 사용자 인증 로직으로 교체 (DB 조회, 해시 비교 등)
+    if req.id == "testuser" and req.password == "1234":
+        return {
+            "status": "success",
+            "message": "로그인 성공",
+        }
+
+    return {
+        "status": "fail",
+        "message": "아이디 또는 비밀번호가 올바르지 않습니다.",
     }

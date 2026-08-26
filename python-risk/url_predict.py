@@ -1,61 +1,43 @@
 """
-url_predict.py
+predict.py
+─────────────────────────────────────────────────────────
+train.py 로 학습/저장된 모델(output/ 폴더)과
+feature_extractor.py 의 실시간 피처 추출을 결합해서
+임의의 URL 하나를 "정상 / 악성"으로 판별한다.
 
-Random Forest 모델과
-url_feature_extractor.py의 실시간 Feature 추출을 이용하여
-URL을 정상 / 의심 / 악성으로 판정한다.
-
-사용 예:
-    python url_predict.py https://myfido2mfa.com/login.html
+사용법:
+    python predict.py https://example.com
 """
-import asyncio
-import os
-import sys
 
+import asyncio
+import sys
+import os
 import joblib
 import numpy as np
 import pandas as pd
+import requests
 
 from playwright.async_api import async_playwright
 from url_feature_extractor import extract_features
 
+OUTPUT_DIR = "output"
 
-# ============================================================
-# OUTPUT_DIR: 이 파일(url_predict.py) 위치 기준 절대경로로 고정
-# ============================================================
+# 로그인 서버 주소
+LOGIN_API = "http://localhost:8000/login"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
-# ============================================================
-# 모델 및 전처리 객체 로드
-# ============================================================
+####################################################
+# 모델 로드
+####################################################
 
 def load_artifacts(output_dir=OUTPUT_DIR):
 
-    model = joblib.load(
-        os.path.join(output_dir, "rf_model.pkl")
-    )
-
-    scaler = joblib.load(
-        os.path.join(output_dir, "scaler.pkl")
-    )
-
-    scale_cols = joblib.load(
-        os.path.join(output_dir, "scale_cols.pkl")
-    )
-
-    selected_features = joblib.load(
-        os.path.join(output_dir, "selected_features.pkl")
-    )
-
-    log_cols = joblib.load(
-        os.path.join(output_dir, "log_cols.pkl")
-    )
-
-    clip_upper = joblib.load(
-        os.path.join(output_dir, "clip_upper.pkl")
-    )
+    model = joblib.load(os.path.join(output_dir, "rf_model.pkl"))
+    scaler = joblib.load(os.path.join(output_dir, "scaler.pkl"))
+    scale_cols = joblib.load(os.path.join(output_dir, "scale_cols.pkl"))
+    selected_features = joblib.load(os.path.join(output_dir, "selected_features.pkl"))
+    log_cols = joblib.load(os.path.join(output_dir, "log_cols.pkl"))
+    clip_upper = joblib.load(os.path.join(output_dir, "clip_upper.pkl"))
 
     return {
         "model": model,
@@ -67,73 +49,72 @@ def load_artifacts(output_dir=OUTPUT_DIR):
     }
 
 
-# ============================================================
-# Feature → DataFrame
-# ============================================================
+####################################################
+# Feature -> DataFrame
+####################################################
 
 def build_feature_row(raw_feature, artifacts):
 
-    selected_features = artifacts["selected_features"]
-
-    # 학습할 때 사용했던 Feature 순서 그대로 맞춤
     row = {
-        feature: raw_feature.get(feature, 0)
-        for feature in selected_features
+        f: raw_feature.get(f, 0)
+        for f in artifacts["selected_features"]
     }
 
-    X = pd.DataFrame(
-        [row],
-        columns=selected_features
-    )
+    X = pd.DataFrame([row])
 
-    # --------------------------------------------------------
-    # 1. Log Transform
-    # --------------------------------------------------------
-
+    # log1p
     for col in artifacts["log_cols"]:
-
         if col in X.columns:
+            X[col] = np.log1p(X[col].clip(lower=0))
 
-            X[col] = np.log1p(
-                X[col].clip(lower=0)
-            )
-
-    # --------------------------------------------------------
-    # 2. Clipping
-    # --------------------------------------------------------
-
+    # clipping
     for col, upper in artifacts["clip_upper"].items():
-
         if col in X.columns:
+            X[col] = X[col].clip(upper=upper)
 
-            X[col] = X[col].clip(
-                upper=upper
-            )
-
-    # --------------------------------------------------------
-    # 3. Scaling
-    # --------------------------------------------------------
-
-    scale_cols = artifacts["scale_cols"]
-
-    X[scale_cols] = artifacts["scaler"].transform(
-        X[scale_cols]
+    # scaling
+    X[artifacts["scale_cols"]] = artifacts["scaler"].transform(
+        X[artifacts["scale_cols"]]
     )
 
     return X
 
 
-# ============================================================
-# URL 분석
-# ============================================================
+####################################################
+# 로그인 서버 호출
+####################################################
+
+def login_server(user_id, password):
+
+    try:
+
+        response = requests.post(
+            LOGIN_API,
+            json={
+                "id": user_id,
+                "password": password
+            }
+        )
+
+        return response.json()
+
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+####################################################
+# 예측
+####################################################
 
 async def predict_url(url, artifacts):
 
     async with async_playwright() as p:
 
-        browser = await p.chromium.launch(
-            headless=True
-        )
+        browser = await p.chromium.launch(headless=True)
 
         context = await browser.new_context(
             ignore_https_errors=True
@@ -142,61 +123,37 @@ async def predict_url(url, artifacts):
         page = await context.new_page()
 
         try:
-
-            print(f"[1] URL 접속 및 Feature 분석")
-            print(f"    {url}")
-
-            # ------------------------------------------------
-            # URL + DOM Feature 추출
-            # ------------------------------------------------
-
-            raw_feature = await extract_features(
-                url,
-                page
-            )
+            raw_feature = await extract_features(url, page)
 
         finally:
-
             await context.close()
             await browser.close()
 
-    # ========================================================
-    # Feature → ML 입력 데이터
-    # ========================================================
-
-    X = build_feature_row(
-        raw_feature,
-        artifacts
-    )
-
-    # ========================================================
-    # Random Forest 예측
-    # ========================================================
+    X = build_feature_row(raw_feature, artifacts)
 
     model = artifacts["model"]
 
-    prob = float(
-        model.predict_proba(X)[0, 1]
-    )
+    # 악성 확률
+    prob = float(model.predict_proba(X)[0, 1])
 
-    # ========================================================
-    # 판정
-    # ========================================================
+    ####################################################
+    # 3단계 판정
+    ####################################################
 
     if prob >= 0.90:
 
-        prediction = 1
-        verdict = "Malicious"
+        prediction = 1          # 로그인 차단
+        verdict = "🚨 Malicious"
 
     elif prob >= 0.70:
 
-        prediction = 0
-        verdict = "Suspicious"
+        prediction = 0          # 로그인은 차단하지 않음
+        verdict = "⚠ Suspicious"
 
     else:
 
         prediction = 0
-        verdict = "Legitimate"
+        verdict = "✅ Legitimate"
 
     return {
 
@@ -207,92 +164,62 @@ async def predict_url(url, artifacts):
         "verdict": verdict,
 
         "raw_feature": raw_feature
-
     }
 
 
-# ============================================================
-# 직접 실행용
-# ============================================================
+
+####################################################
+# MAIN
+####################################################
 
 async def main():
 
     if len(sys.argv) < 2:
 
-        print()
-        print("사용법:")
-        print(
-            "python url_predict.py "
-            "https://myfido2mfa.com/login.html"
-        )
-        print()
+        print("사용법")
+        print("python predict.py https://사이트주소")
 
         return
 
     url = sys.argv[1]
 
-    print("=" * 60)
-    print("AI URL / DOM 피싱 탐지")
-    print("=" * 60)
-
-    # --------------------------------------------------------
-    # 모델 로드
-    # --------------------------------------------------------
-
     artifacts = load_artifacts()
 
-    # --------------------------------------------------------
-    # URL 분석
-    # --------------------------------------------------------
+    result = await predict_url(url, artifacts)
 
-    result = await predict_url(
-        url,
-        artifacts
-    )
-
-    # --------------------------------------------------------
-    # 결과 출력
-    # --------------------------------------------------------
-
-    print()
     print("=" * 60)
-    print("검사 URL :", url)
-    print(
-        "판정     :",
-        result["verdict"]
-    )
-    print(
-        "악성 확률:",
-        result["prob"]
-    )
+    print("URL :", url)
+    print("판정 :", result["verdict"])
+    print("악성 확률 :", round(result["prob"], 4))
     print("=" * 60)
 
-    # --------------------------------------------------------
-    # 인증 정책
-    # --------------------------------------------------------
+    ##############################################
+    # 피싱이면 로그인 차단
+    ##############################################
 
-    if result["prediction"] == 1:
+    if result["verdict"] == "🚨 Malicious":
 
-        print()
-        print("🚨 피싱 사이트가 탐지되었습니다.")
+        print("\n🚨 피싱 사이트입니다.")
         print("❌ 로그인을 차단합니다.")
+        return
 
-    elif result["verdict"] == "Suspicious":
+    elif result["verdict"] == "⚠ Suspicious":
 
-        print()
-        print("⚠ 의심스러운 사이트입니다.")
-        print("🔐 추가 인증을 요구할 수 있습니다.")
+        print("\n⚠ 의심 사이트입니다.")
+        print("추가 인증(FIDO2 재인증)을 수행합니다.")
 
     else:
 
-        print()
-        print("✅ 정상 사이트로 판단되었습니다.")
-        print("🔓 로그인을 허용할 수 있습니다.")
+        print("\n✅ 정상 사이트입니다.")
+        print("로그인을 진행합니다.")
 
+    response = login_server(
+        "testuser",
+        "1234"
+    )
 
-# ============================================================
-# 실행
-# ============================================================
+    print(response)
+
 
 if __name__ == "__main__":
 
