@@ -35,6 +35,13 @@
 --   03_ml_grants.sql
 --   실행 후 적용할 것
 --
+-- [COMMENT 표기]
+--   Event COMMENT 문자열은 ASCII(영문)로 작성합니다.
+--   운영 환경(EC2) 터미널에서 MySQL로 한글 입력이 전달되지 않아
+--   COMMENT가 손실되는 현상이 확인되어, DB 등록값과 본 파일을
+--   동일한 영문 표기로 통일합니다.
+--   본 파일 내 설명 주석(--)은 한글 그대로 유지합니다.
+--
 -- [실행 주체]
 --   본 Event는 관리자 계정으로 생성하며,
 --   생성한 계정이 DEFINER가 됩니다.
@@ -108,7 +115,7 @@ CREATE EVENT ev_purge_ml_feature_logs
     )
 
   COMMENT
-    'F-09 v2.2: ml_feature_logs REAL 데이터 90일 Sliding Window 파기. 매일 02:00'
+    'F-09 v2.2: ml_feature_logs REAL data, 90-day sliding window, daily 02:00'
 
   DO
 
@@ -144,7 +151,7 @@ CREATE EVENT ev_purge_ml_predictions
     )
 
   COMMENT
-    'F-09 v2.2: ml_predictions 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: ml_predictions retention 1 year, daily 02:00'
 
   DO
 
@@ -181,7 +188,7 @@ CREATE EVENT mfa_db.ev_purge_audit_logs
     )
 
   COMMENT
-    'F-09 v2.2: audit_logs 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: audit_logs retention 1 year, daily 02:00'
 
   DO
 
@@ -245,7 +252,7 @@ CREATE EVENT ev_purge_risk_scores
     )
 
   COMMENT
-    'F-09 v2.2: risk_scores 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: risk_scores retention 1 year, daily 02:00'
 
   DO
 
@@ -283,7 +290,7 @@ CREATE EVENT ev_purge_access_logs
     )
 
   COMMENT
-    'F-09 v2.2: access_logs 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: access_logs retention 1 year, daily 02:00'
 
   DO
 
