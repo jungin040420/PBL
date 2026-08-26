@@ -1,3 +1,7 @@
 fastapi
 uvicorn
 playwright
+joblib
+pandas
+numpy
+scikit-learn
