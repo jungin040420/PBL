@@ -12,6 +12,11 @@ const {
 } = require('../utils/anonymize');
 
 
+// ============================================================
+// CASE 3
+// 인증수단 변경 요청 → Risk Re-Evaluation
+// ============================================================
+
 exports.requestAuthMethodChange = async (req, res) => {
   try {
     const username = req.username;
@@ -43,14 +48,11 @@ exports.requestAuthMethodChange = async (req, res) => {
     context.consecutiveFailureCount =
         failedLoginCount;
 
-
     // No new Passkey challenge has occurred yet.
     context.challengeResponseTime = null;
 
-
     // Accessing the setting does not mean the method changed.
     context.authenticationMethodChanged = false;
-
 
     // No credential verification has occurred in this request.
     context.signCountAbnormal = false;
@@ -422,6 +424,279 @@ exports.requestAuthMethodChange = async (req, res) => {
           success: false,
           error:
               'RISK_RE_EVALUATION_FAILED',
+          message:
+          error.message
+        });
+  }
+};
+
+
+// ============================================================
+// CASE 3
+// RE_AUTH 전용 Context 조회
+//
+// 중요:
+// 일반 authMiddleware는 RE-AUTH 상태의 세션을 차단한다.
+//
+// 따라서 Passkey 추가 인증을 시작할 때는
+// 이 API에서 직접 아래 3가지를 확인한다.
+//
+// 1. session cookie 존재
+// 2. session.status === RE-AUTH
+// 3. reauth:{userId} === PENDING
+//
+// Keyspace Notification을 사용하지 않으므로
+// reauth key가 사라졌다면 TTL 만료로 판단하고
+// Session을 BLOCKED로 변경한다.
+// ============================================================
+
+exports.getReauthContext = async (req, res) => {
+  try {
+
+    // ========================================================
+    // 1. Session cookie
+    // ========================================================
+
+    const sessionToken =
+        req.cookies?.session;
+
+
+    if (!sessionToken) {
+      return res
+          .status(401)
+          .json({
+            success: false,
+            error:
+                'SESSION_REQUIRED'
+          });
+    }
+
+
+    // ========================================================
+    // 2. Token parsing
+    //
+    // token:
+    // username:sessionId
+    // ========================================================
+
+    const [
+      username,
+      sessionId
+    ] = sessionToken.split(':');
+
+
+    if (
+        !username
+        ||
+        !sessionId
+    ) {
+      return res
+          .status(401)
+          .json({
+            success: false,
+            error:
+                'INVALID_SESSION_TOKEN'
+          });
+    }
+
+
+    // ========================================================
+    // 3. Session 조회
+    // ========================================================
+
+    const sessionKey =
+        `session:${username}:${sessionId}`;
+
+
+    const rawSession =
+        await redisClient.get(
+            sessionKey
+        );
+
+
+    if (!rawSession) {
+      return res
+          .status(401)
+          .json({
+            success: false,
+            error:
+                'SESSION_EXPIRED'
+          });
+    }
+
+
+    let session;
+
+    try {
+      session =
+          JSON.parse(
+              rawSession
+          );
+    } catch (parseError) {
+
+      console.error(
+          '[REAUTH][INVALID_SESSION_DATA]',
+          {
+            username,
+            sessionId,
+            error:
+            parseError.message
+          }
+      );
+
+      return res
+          .status(500)
+          .json({
+            success: false,
+            error:
+                'INVALID_SESSION_DATA'
+          });
+    }
+
+
+    // ========================================================
+    // 4. 이미 BLOCKED 상태
+    // ========================================================
+
+    if (
+        session.status === 'BLOCKED'
+    ) {
+      return res
+          .status(403)
+          .json({
+            success: false,
+            error:
+                'SESSION_BLOCKED'
+          });
+    }
+
+
+    // ========================================================
+    // 5. RE-AUTH 상태 확인
+    // ========================================================
+
+    if (
+        session.status !== 'RE-AUTH'
+    ) {
+      return res
+          .status(409)
+          .json({
+            success: false,
+            error:
+                'REAUTH_NOT_REQUIRED',
+            status:
+                session.status || 'ACTIVE'
+          });
+    }
+
+
+    // ========================================================
+    // 6. reauth:{userId} 확인
+    // ========================================================
+
+    const reauthKey =
+        `reauth:${username}`;
+
+
+    const reauthState =
+        await redisClient.get(
+            reauthKey
+        );
+
+
+    // ========================================================
+    // 7. PENDING이면 추가 Passkey 인증 허용
+    // ========================================================
+
+    if (
+        reauthState === 'PENDING'
+    ) {
+
+      const remainingTTL =
+          await redisClient.ttl(
+              reauthKey
+          );
+
+
+      console.log(
+          '[REAUTH][CONTEXT_OK]',
+          {
+            username,
+            sessionId,
+            state:
+            reauthState,
+            ttl:
+            remainingTTL
+          }
+      );
+
+
+      return res
+          .status(200)
+          .json({
+            success: true,
+            username,
+            sessionId,
+            reauthPending:
+                true,
+            remainingTTL
+          });
+    }
+
+
+    // ========================================================
+    // 8. RE-AUTH Session인데 reauth key가 없음
+    //
+    // => REAUTH_TTL 만료
+    // => Lazy expiration detection
+    // => Session BLOCKED
+    // ========================================================
+
+    const blocked =
+        await updateSessionStatus(
+            username,
+            sessionId,
+            'BLOCKED'
+        );
+
+
+    console.log(
+        '[REAUTH][EXPIRED_CONTEXT]',
+        {
+          username,
+          sessionId,
+          reauthState,
+          sessionBlocked:
+          blocked
+        }
+    );
+
+
+    return res
+        .status(401)
+        .json({
+          success: false,
+          error:
+              'REAUTH_EXPIRED',
+          requiresReauthentication:
+              false
+        });
+
+
+  } catch (error) {
+
+    console.error(
+        '[REAUTH][CONTEXT_ERROR]',
+        error
+    );
+
+
+    return res
+        .status(500)
+        .json({
+          success: false,
+          error:
+              'REAUTH_CONTEXT_FAILED',
           message:
           error.message
         });

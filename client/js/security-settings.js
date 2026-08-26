@@ -298,7 +298,7 @@ async function performStepUpAuthentication() {
 
         const meResponse =
             await fetch(
-                "/api/me",
+                "/api/sensitive/reauth-context",
                 {
                     method: "GET",
                     credentials: "include"
