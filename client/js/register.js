@@ -67,6 +67,7 @@ async function startPasskeyRegister() {
         }
       },
     });
+    
     const authenticatorAttachment = credential.authenticatorAttachment || 'unknown';
     console.log('생성된 credential:', credential);
 

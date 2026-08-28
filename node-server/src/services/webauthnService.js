@@ -1,28 +1,17 @@
 const crypto = require('crypto');
 const { db } = require('../../config/db');
-const { storeChallenge } = require('./challenge');
-
+const { storeChallenge } = require('../services/challenge'); 
 const rpId = process.env.RP_ID || 'localhost';
 
+exports.generateRegistrationOptions = async (username, displayName) => {
 
-// ============================================================
-// 등록 Challenge 생성
-// ============================================================
+  const { challengeId, challengeValue } = await storeChallenge(username);
 
-exports.generateRegistrationOptions = async (
-    username,
-    displayName
-) => {
+  const userId = crypto.randomBytes(8).toString('base64url');
 
-  const {
-    challengeId,
-    challengeValue
-  } = await storeChallenge(username);
+  
 
-  const userId =
-      crypto.randomBytes(8).toString('base64url');
-
-  return {
+  return { 
     challenge: challengeValue,
     challengeId,
     userId,
@@ -30,56 +19,30 @@ exports.generateRegistrationOptions = async (
   };
 };
 
+exports.generateLoginOptions = async (username) => {
 
-// ============================================================
-// 로그인 Challenge 생성
-// ============================================================
-
-exports.generateLoginOptions = async (
-    username
-) => {
-
-  // 로그인 시작 1회당 Challenge 1개만 생성
-  const {
-    challengeId,
-    challengeValue
-  } = await storeChallenge(username);
-
-  console.log(
-      'challengeId:',
-      challengeId
-  );
-
-  console.log(
-      'challengeValue:',
-      challengeValue
-  );
+  const { challengeId, challengeValue } = await storeChallenge(username);
+  
+  //추후에 제거
+  console.log('challengeId:', challengeId);            
+  console.log('challengeValue:', challengeValue);
 
   const [rows] = await db.query(
-      `
-      SELECT
-        p.credential_id
-      FROM passkeys p
-      JOIN users u
-        ON p.user_id = u.id
-      WHERE u.username = ?
-        AND p.is_active = 1
-    `,
-      [username]
+    `SELECT p.credential_id FROM passkeys p
+     JOIN users u ON p.user_id = u.id
+     WHERE u.username = ?
+     AND p.is_active = 1`,
+    [username]
   );
 
-  const allowCredentials =
-      rows.map(row => ({
-        id: row.credential_id,
-        type: 'public-key',
-      }));
+  const allowCredentials = rows.map(row => ({
+    id: row.credential_id,
+    type: 'public-key',
+  }));
 
-  console.log(
-      '반환할 challengeId:',
-      challengeId
-  );
+  console.log('반환할 challengeId:', challengeId);
 
-  return {
+  return { 
     challenge: challengeValue,
     challengeId,
     rpId,

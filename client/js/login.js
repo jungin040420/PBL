@@ -104,11 +104,13 @@ async function startPasskeyLogin() {
 
     if (loginResult.success) {
       setStatus(`환영합니다, ${username}님!`);
-      // 대시보드 연결
-      // location.href = '/dashboard.html';
       document.getElementById('loginFormArea').style.display = 'none';
       document.getElementById('authBtnGroup').style.display = 'none';
       document.getElementById('logoutBtn').style.display = 'block';
+
+    } else if (loginResult.requiresReauthentication) {
+      setStatus(loginResult.message || '이메일로 전송된 인증 코드를 입력해주세요.');
+      showReauthUI();
 
     } else {
       setStatus('로그인 실패: ' + loginResult.error);
@@ -131,7 +133,7 @@ async function startLogout() {
 
     if (result.success) {
       setStatus('로그아웃 되었습니다.');
-      
+
       // UI를 초기 로그인 상태로 복구
       document.getElementById('loginFormArea').style.display = 'block';
       document.getElementById('authBtnGroup').style.display = 'flex';
@@ -145,3 +147,99 @@ async function startLogout() {
     setStatus('로그아웃 중 오류 발생');
   }
 }
+
+let otpTimerInterval = null;
+
+function showReauthUI() {
+  document.getElementById('authBtnGroup').style.display = 'none';
+  document.getElementById('reauthArea').style.display = 'flex';
+  document.getElementById('otpInput').value = '';
+  document.getElementById('otpInput').focus();
+  startOtpCountdown(180); // REAUTH_TTL과 동일한 값(초)
+}
+
+function hideReauthUI() {
+  document.getElementById('reauthArea').style.display = 'none';
+  document.getElementById('authBtnGroup').style.display = 'flex';
+  if (otpTimerInterval) {
+    clearInterval(otpTimerInterval);
+    otpTimerInterval = null;
+  }
+}
+
+function startOtpCountdown(seconds) {
+  let remaining = seconds;
+  const timerEl = document.getElementById('otpTimer');
+
+  if (otpTimerInterval) clearInterval(otpTimerInterval);
+
+  const tick = () => {
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    timerEl.textContent = `남은 시간: ${m}:${String(s).padStart(2, '0')}`;
+
+    if (remaining <= 0) {
+      clearInterval(otpTimerInterval);
+      timerEl.textContent = '인증 코드가 만료되었습니다. 다시 로그인해주세요.';
+      document.getElementById('otpSubmitBtn').disabled = true;
+      return;
+    }
+    remaining -= 1;
+  };
+
+  tick();
+  otpTimerInterval = setInterval(tick, 1000);
+}
+
+async function submitOtp() {
+  const otp = document.getElementById('otpInput').value.trim();
+
+  if (!otp || otp.length !== 6) {
+    setStatus('6자리 인증 코드를 입력해주세요.');
+    return;
+  }
+
+  try {
+    setStatus('인증 코드 확인 중...');
+    document.getElementById('otpSubmitBtn').disabled = true;
+
+    const res = await fetch('/auth/reauth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ otp }),
+    });
+
+    const result = await res.json();
+    console.log('재인증 결과:', result);
+
+    if (result.success) {
+      setStatus('인증 완료! 로그인되었습니다.');
+      hideReauthUI();
+      document.getElementById('loginFormArea').style.display = 'none';
+      document.getElementById('logoutBtn').style.display = 'block';
+      return;
+    }
+
+    // 실패 케이스별 메시지 분기
+    if (result.reason === 'REAUTH_EXPIRED') {
+      setStatus('인증 코드가 만료되었습니다. 처음부터 다시 로그인해주세요.');
+      hideReauthUI();
+    } else if (result.reason === 'REAUTH_BLOCKED') {
+      setStatus('시도 횟수를 초과했습니다. 처음부터 다시 로그인해주세요.');
+      hideReauthUI();
+    } else {
+      setStatus('인증 코드가 일치하지 않습니다. 다시 입력해주세요.');
+      document.getElementById('otpSubmitBtn').disabled = false;
+      document.getElementById('otpInput').value = '';
+      document.getElementById('otpInput').focus();
+    }
+
+  } catch (error) {
+    console.error('재인증 오류:', error);
+    setStatus('오류 발생: ' + error.message);
+    document.getElementById('otpSubmitBtn').disabled = false;
+  }
+}
+
+window.submitOtp = submitOtp;
