@@ -242,7 +242,7 @@ services:
     networks:
       - auth_network
 
-    restart: unless-stopped
+    restart: "no"
 
 
   # ==========================================================
@@ -259,7 +259,7 @@ services:
     networks:
       - auth_network
 
-    restart: unless-stopped
+    restart: "no"
 
 
 # ============================================================

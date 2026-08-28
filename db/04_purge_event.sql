@@ -8,6 +8,10 @@
 --               : 매일 새벽 2시
 --               : created_at < NOW() - INTERVAL 1 YEAR
 --
+--             access_logs
+--               : 매일 새벽 2시
+--               : created_at < NOW() - INTERVAL 1 YEAR
+--
 --             ml_feature_logs
 --               : 매일 새벽 2시
 --               : data_source='REAL'
@@ -23,13 +27,20 @@
 --
 -- 담당자     : 윤정인
 -- 작성일     : 2026.07.29
--- 수정일     : 2026.08.25
+-- 수정일     : 2026.08.26
 --
 -- [실행 순서]
 --   01_init.sql
 --   02_ml_schema.sql
 --   03_ml_grants.sql
 --   실행 후 적용할 것
+--
+-- [COMMENT 표기]
+--   Event COMMENT 문자열은 ASCII(영문)로 작성합니다.
+--   운영 환경(EC2) 터미널에서 MySQL로 한글 입력이 전달되지 않아
+--   COMMENT가 손실되는 현상이 확인되어, DB 등록값과 본 파일을
+--   동일한 영문 표기로 통일합니다.
+--   본 파일 내 설명 주석(--)은 한글 그대로 유지합니다.
 --
 -- [실행 주체]
 --   본 Event는 관리자 계정으로 생성하며,
@@ -104,7 +115,7 @@ CREATE EVENT ev_purge_ml_feature_logs
     )
 
   COMMENT
-    'F-09 v2.2: ml_feature_logs REAL 데이터 90일 Sliding Window 파기. 매일 02:00'
+    'F-09 v2.2: ml_feature_logs REAL data, 90-day sliding window, daily 02:00'
 
   DO
 
@@ -140,7 +151,7 @@ CREATE EVENT ev_purge_ml_predictions
     )
 
   COMMENT
-    'F-09 v2.2: ml_predictions 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: ml_predictions retention 1 year, daily 02:00'
 
   DO
 
@@ -177,7 +188,7 @@ CREATE EVENT mfa_db.ev_purge_audit_logs
     )
 
   COMMENT
-    'F-09 v2.2: audit_logs 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: audit_logs retention 1 year, daily 02:00'
 
   DO
 
@@ -241,7 +252,7 @@ CREATE EVENT ev_purge_risk_scores
     )
 
   COMMENT
-    'F-09 v2.2: risk_scores 1년 보존 후 파기. 매일 02:00'
+    'F-09 v2.2: risk_scores retention 1 year, daily 02:00'
 
   DO
 
@@ -251,8 +262,46 @@ WHERE created_at
           < NOW() - INTERVAL 1 YEAR;
 
 
+-- ---------------------------------------------------------------------
+-- 5. access_logs
+--
+-- 인증 성공·실패 접근 기록
+--
+-- 보존기간:
+--   1년
+--
+-- auth_failures 테이블을 별도로 두지 않고 본 테이블로 통합했으므로
+-- (인증·DB 담당 협의 결과) audit_logs와 동일한 보존기간을 적용한다.
+--
+-- created_at 인덱스(idx_access_created)는 01_init.sql에 이미 존재하므로
+-- 별도 인덱스 추가가 필요하지 않다.
+-- ---------------------------------------------------------------------
+
+DROP EVENT IF EXISTS ev_purge_access_logs;
+
+CREATE EVENT ev_purge_access_logs
+  ON SCHEDULE
+    EVERY 1 DAY
+
+    STARTS (
+      TIMESTAMP(CURRENT_DATE)
+      + INTERVAL 1 DAY
+      + INTERVAL 2 HOUR
+    )
+
+  COMMENT
+    'F-09 v2.2: access_logs retention 1 year, daily 02:00'
+
+  DO
+
+DELETE FROM authdb.access_logs
+
+WHERE created_at
+          < NOW() - INTERVAL 1 YEAR;
+
+
 -- =====================================================================
--- 5. 검증
+-- 6. 검증
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -294,6 +343,7 @@ WHERE created_at
 -- 정상 기대 Event:
 --
 -- ev_purge_risk_scores
+-- ev_purge_access_logs
 
 
 -- ---------------------------------------------------------------------
@@ -303,8 +353,19 @@ WHERE created_at
 -- SHOW INDEX FROM authdb.risk_scores;
 
 
+-- ---------------------------------------------------------------------
+-- access_logs 인덱스 확인
+-- ---------------------------------------------------------------------
+
+-- SHOW INDEX FROM authdb.access_logs;
+
+-- 정상 기대 인덱스:
+--
+-- idx_access_created (01_init.sql에서 생성)
+
+
 -- =====================================================================
--- 6. 데이터 파기 정책 요약
+-- 7. 데이터 파기 정책 요약
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -353,8 +414,18 @@ WHERE created_at
 -- WHERE created_at < NOW() - INTERVAL 1 YEAR;
 
 
+-- ---------------------------------------------------------------------
+-- access_logs
+--
+-- 1년 보존
+-- ---------------------------------------------------------------------
+
+-- DELETE FROM authdb.access_logs
+-- WHERE created_at < NOW() - INTERVAL 1 YEAR;
+
+
 -- =====================================================================
--- 7. 삭제 건수 감사 로그
+-- 8. 삭제 건수 감사 로그
 --
 -- F-09 v2.2 §3은 Event Scheduler 실행 후
 -- 삭제 건수를 F-06 감사 로그에 기록하도록 정의하고 있다.
