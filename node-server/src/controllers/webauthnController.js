@@ -5,7 +5,7 @@ const { sendRiskData } = require('../services/riskService');
 const { db, authdb, redisClient } = require('../../config/db');
 const { hashForCompare, hashUserId } = require('../utils/anonymize');
 const { encryptObject } = require('../utils/crypto');
-
+const otpService = require('../services/otpService');
 
 exports.registerStart = async (req, res) => {
     try {
@@ -149,8 +149,9 @@ exports.loginStart = async (req, res) => {
 exports.loginFinish = async (req, res) => {
     const { username } = req.body;
     try {
-        const { challengeId, credential } = req.body;
+        const { challengeId, credential, fingerprint } = req.body;
         const context = req.context || {};
+        context.fingerprint = fingerprint;
 
         const startTime = await redisClient.get(`challenge:time:${username}`);
         const challengeResponseTime = startTime
@@ -247,7 +248,7 @@ exports.loginFinish = async (req, res) => {
 
         // 로그이 성공 시
         const [rows] = await db.query(
-            `SELECT id, username FROM users WHERE username = ? LIMIT 1`,
+            `SELECT id, username, email FROM users WHERE username = ? LIMIT 1`,
             [username]
         );
         if (!rows || rows.length === 0) {
@@ -297,13 +298,18 @@ exports.loginFinish = async (req, res) => {
         });
         await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
 
-        const [passkeyRows] = await db.query(
-            `SELECT p.authenticator_type FROM passkeys p
-            JOIN users u ON p.user_id = u.id
-            WHERE u.username = ? AND p.credential_id = ?`,
-            [username, credential.id]
-        );
-        const successregisteredType = passkeyRows[0]?.authenticator_type || 'unknown';
+        let successregisteredType = 'unknown';
+        try {
+            const [passkeyRows] = await db.query(
+                `SELECT p.authenticator_type FROM passkeys p
+        JOIN users u ON p.user_id = u.id
+        WHERE u.username = ? AND p.credential_id = ? AND p.is_active = 1 LIMIT 1`,
+                [username, credential.id]
+            );
+            successregisteredType = passkeyRows?.[0]?.authenticator_type || 'unknown';
+        } catch (e) {
+            console.error('authenticator_type 조회 실패:', e.message);
+        }
         const successcurrentType = credential.authenticatorAttachment || 'unknown';
         context.authenticationMethodChanged = successregisteredType !== successcurrentType;
 
@@ -376,10 +382,36 @@ exports.loginFinish = async (req, res) => {
         }
 
         if (riskAction === 'RE_AUTH') {
+            const userId = rows[0].id;
+            const email = rows[0].email;
+
+            const session = await sessionManager.createSession(
+                userId, context.ip, context.userAgent, context.fingerprint, 'RE-AUTH'
+            );
+
+            try {
+                await otpService.generateAndSendOtp(userId, email);
+            } catch (otpError) {
+                console.error('OTP 발송 실패:', otpError.message);
+                await sessionManager.deleteSession(session.token);
+                return res.status(503).json({
+                    success: false,
+                    error: '인증 코드 발송에 실패했습니다. 잠시 후 다시 시도해주세요.',
+                });
+            }
+
+            const isNgrok = req.headers.host?.includes('ngrok');
+            res.cookie('session', session.token, {
+                httpOnly: true,
+                secure: isNgrok ? true : false,
+                sameSite: isNgrok ? 'none' : 'lax',
+                maxAge: 1000 * 60 * 60,
+            });
+
             return res.status(200).json({
                 success: false,
                 requiresReauthentication: true,
-                message: riskMessage || '추가 인증이 필요합니다.',
+                message: riskMessage || '이메일로 전송된 인증 코드를 입력해주세요.',
                 riskScore, riskLevel, riskAction,
                 triggers: riskTriggers,
                 featureScores: riskFeatureScores,
@@ -391,7 +423,7 @@ exports.loginFinish = async (req, res) => {
         }
 
         const session = await sessionManager.createSession(
-            username, context.ip, context.userAgent
+            rows[0].id, context.ip, context.userAgent, fingerprint
         );
         console.log('세션 생성 결과:', session);
 
@@ -472,14 +504,52 @@ exports.verifySession = async (req, res) => {
             return res.status(401).json({ error: '토큰 없음' });
         }
 
-        const result = await sessionManager.verifySession(sessionToken);
+        const context = req.context || {};
+
+        const result = await sessionManager.verifySession(sessionToken, context.ip, context.userAgent);
         if (!result.valid) {
-            return res.status(401).json({ error: result.reason || '세션 만료' });
+            res.clearCookie('session');
         }
 
         return res.status(200).json({ success: true, username: result.username });
     } catch (error) {
         console.error('verifySession 오류:', error);
+        return res.status(500).json({ error: '서버 오류' });
+    }
+};
+
+exports.reauthVerify = async (req, res) => {
+    try {
+        const sessionToken = req.cookies.session;
+        if (!sessionToken) {
+            return res.status(401).json({ error: '세션이 없습니다' });
+        }
+
+        const { otp } = req.body;
+        if (!otp || typeof otp !== 'string') {
+            return res.status(400).json({ error: 'OTP를 입력해주세요' });
+        }
+
+        const [userId, sessionId] = sessionToken.split(':');
+        if (!userId || !sessionId) {
+            return res.status(401).json({ error: '유효하지 않은 세션입니다' });
+        }
+
+        const result = await otpService.verifyOtp(userId, otp);
+
+        if (!result.valid) {
+            if (result.reason === 'REAUTH_EXPIRED' || result.reason === 'REAUTH_BLOCKED') {
+                await sessionManager.updateSessionStatus(userId, sessionId, 'BLOCKED');
+                res.clearCookie('session');
+            }
+            return res.status(401).json({ error: '인증 실패', reason: result.reason });
+        }
+
+        await sessionManager.updateSessionStatus(userId, sessionId, 'ACTIVE');
+        return res.status(200).json({ success: true, message: '인증 완료' });
+
+    } catch (error) {
+        console.error('reauthVerify 오류:', error);
         return res.status(500).json({ error: '서버 오류' });
     }
 };

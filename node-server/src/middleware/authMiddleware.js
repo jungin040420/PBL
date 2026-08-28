@@ -1,3 +1,4 @@
+const requestIp = require('request-ip');
 const sessionManager = require('../services/sessionManager');
 
 module.exports = async (req, res, next) => {
@@ -8,9 +9,20 @@ module.exports = async (req, res, next) => {
       return res.status(401).json({ error: '로그인이 필요합니다' });
     }
 
-    const result = await sessionManager.verifySession(sessionToken);
+    const context = req.context || {};
+    const currentIp = context.ip;
+    const currentUserAgent = req.headers['user-agent'] || 'unknown';
+
+    const result = await sessionManager.verifySession(sessionToken, currentIp, currentUserAgent);
 
     if (!result.valid) {
+      res.clearCookie('session');
+      if (result.reason === 'SESSION_HIJACK_SUSPECTED') {
+        return res.status(401).json({ error: '비정상적인 접근이 감지되어 로그아웃되었습니다' });
+      }
+      if (result.reason === 'SESSION_NOT_ACTIVE') {
+        return res.status(401).json({ error: '추가 인증을 완료해주세요', reason: 'SESSION_NOT_ACTIVE' });
+      }
       return res.status(401).json({ error: '세션이 만료됐습니다' });
     }
 

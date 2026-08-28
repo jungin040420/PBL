@@ -29,6 +29,14 @@
       Passkey 로그인을 진행해주세요.
     </div>
 
+    <div id="reauthArea" class="field" style="display: none;">
+      <label for="otpInput">이메일로 전송된 인증 코드</label>
+      <input type="text" id="otpInput" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+        placeholder="6자리 숫자" />
+      <button id="otpSubmitBtn" onclick="submitOtp()">인증 코드 확인</button>
+      <p id="otpTimer" style="font-size: 0.8rem; color: #6b7280; text-align: center;"></p>
+    </div>
+
     <div id="authBtnGroup">
       <button type="button" id="loginBtn" onclick="startPasskeyLogin()">
         Passkey로 로그인
@@ -39,12 +47,9 @@
     </div>
 
     <button type="button" id="logoutBtn" class="btn-danger" onclick="startLogout()" style="display: none;">
-        로그아웃
-      </button>
-    </div>
-
+      로그아웃
+    </button>
   </div>
-
 
   <!-- Passkey 로그인 로직 -->
   <script src="/js/login.js"></script>

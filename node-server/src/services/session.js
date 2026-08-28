@@ -8,7 +8,7 @@ const TTL = {
 };
 
 // 세션 생성 (로그인 성공 시 호출)
-const createSession = async (userId, ipHash, deviceIdHash) => {
+const createSession = async (userId, ipHash, deviceIdHash, fingerprintHash, initialStatus = 'ACTIVE') => {
   const { v4: uuidv4 } = require('uuid');
   const sessionId = uuidv4();
   const key = `session:${userId}:${sessionId}`;
@@ -18,9 +18,10 @@ const createSession = async (userId, ipHash, deviceIdHash) => {
     sessionId,
     issuedAt: now,
     lastActivity: now,
-    status: 'ACTIVE',
+    status: initialStatus,
     ip: ipHash,           // F-08 비식별화 처리된 값
     deviceId: deviceIdHash,
+    fingerprint: fingerprintHash,
   });
 
   await redisClient.set(key, data, { EX: TTL.SESSION });
