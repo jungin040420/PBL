@@ -146,21 +146,19 @@ async def analyze_url(url):
 
     async with async_playwright() as p:
 
-        browser = await p.chromium.launch(
-            headless=True
-        )
-
-        context = await browser.new_context(
-            ignore_https_errors=True
-        )
-
-        page = await context.new_page()
+        browser = None
+        context = None
 
         try:
+            browser = await p.chromium.launch(
+                headless=True
+            )
 
-            ################################################
-            # Feature 추출
-            ################################################
+            context = await browser.new_context(
+                ignore_https_errors=True
+            )
+
+            page = await context.new_page()
 
             raw_feature = await extract_features(
                 url,
@@ -168,10 +166,25 @@ async def analyze_url(url):
             )
 
         finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
-            await context.close()
-            await browser.close()
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
+    X = build_feature_row(raw_feature)
+
+    probability = float(
+        model.predict_proba(X)[0][1]
+    )
+
+    return probability
     ####################################################
     # DataFrame 생성
     ####################################################
