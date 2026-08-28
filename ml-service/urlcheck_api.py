@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-import asyncio
 import os
 import joblib
 import numpy as np
@@ -185,19 +184,7 @@ async def analyze_url(url):
     )
 
     return probability
-    ####################################################
-    # DataFrame 생성
-    ####################################################
 
-    X = build_feature_row(raw_feature)
-
-    ####################################################
-    # 머신러닝 예측
-    ####################################################
-
-    probability = float(model.predict_proba(X)[0][1])
-
-    return probability
 
 ####################################################
 # API
