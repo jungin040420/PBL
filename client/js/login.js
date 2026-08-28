@@ -17,6 +17,25 @@ function toBase64url(buffer) {
     .replace(/=/g, '');
 }
 
+async function generateFingerprint() {
+  const components = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width + 'x' + screen.height,
+    screen.colorDepth,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency || 'unknown',
+    navigator.platform,
+  ];
+
+  const raw = components.join('|');
+  const encoder = new TextEncoder();
+  const data = encoder.encode(raw);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function startPasskeyLogin() {
   const username = document.getElementById('username').value.trim();
 
@@ -51,6 +70,8 @@ async function startPasskeyLogin() {
       },
     });
 
+    const fingerprint = await generateFingerprint()
+
     setStatus('로그인 확인 중...');
     console.log('전송할 challengeId:', options.challengeId);
     const loginRes = await fetch('/auth/login/finish', {
@@ -58,7 +79,8 @@ async function startPasskeyLogin() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username,
-        challengeId: options.challengeId, // ← 추가
+        challengeId: options.challengeId,
+        fingerprint,
         credential: {
           id: credential.id,
           rawId: toBase64url(credential.rawId),

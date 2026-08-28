@@ -224,6 +224,50 @@ const generateFixedSalt = () => {
       .toString("hex");
 };
 
+/**
+ * 세션 바인딩 전용 고정 Salt 해시 (F-18 AiTM 세션 탈취 탐지용)
+ *
+ * @description
+ * 세션 발급 시점의 IP/UA/Fingerprint를 세션 데이터에 바인딩하고,
+ * 이후 요청마다 재계산한 값과 비교해 세션 하이재킹을 탐지하기 위한 함수.
+ * hashForCompare()(로그인 컨텍스트 비교용)와 용도가 달라 salt를 분리함.
+ *
+ * @storage 저장 허용 위치: Redis `session:{username}:{sessionId}` 키 전용.
+ *          그 외 위치(access_logs, lastcontext 등)에는 저장하지 않는다.
+ *
+ * @param {string} value - 해시할 원본 값 (IP, User-Agent, Fingerprint 등)
+ * @returns {string} SHA-256 해시값 (hex)
+ */
+const hashForSessionBinding = (value) => {
+  const salt = process.env.SESSION_SALT;
+
+  if (!salt) {
+    throw new Error(
+        "[F-08] SESSION_SALT 환경변수가 설정되지 않았습니다. " +
+        "세션 바인딩 목적 고정 Salt는 환경변수로만 관리합니다."
+    );
+  }
+
+  if (salt.length < 64) {
+    throw new Error(
+        "[F-08] SESSION_SALT가 32바이트(hex 64자) 미만입니다. " +
+        "NIST SP 800-132 권고 기준 미달."
+    );
+  }
+
+  if (salt === process.env.COMPARE_SALT || salt === process.env.USERID_SALT) {
+    throw new Error(
+        "[F-08] SESSION_SALT가 COMPARE_SALT 또는 USERID_SALT와 동일합니다. " +
+        "규칙 5 혼용 금지 조항 위반."
+    );
+  }
+
+  return crypto
+      .createHash("sha256")
+      .update(String(value) + salt)
+      .digest("hex");
+};
+
 
 module.exports = {
   anonymizeRandom,
@@ -231,4 +275,5 @@ module.exports = {
   hashForCompare,
   anonymizeUserAgent,
   generateFixedSalt,
+  hashForSessionBinding,
 };
