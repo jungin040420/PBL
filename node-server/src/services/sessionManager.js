@@ -13,7 +13,7 @@ exports.createSession = async (userId, ip, userAgent, fingerprint, initialStatus
   const fpHash = hashForSessionBinding(fingerprint || '')
 
   const sessionId = await createSession(userId, ipHash, uaHash, initialStatus);
-  const token = `${username}:${sessionId}`;
+  const token = `${userId}:${sessionId}`;
   return { token };
 };
 
