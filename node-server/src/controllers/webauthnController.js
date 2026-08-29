@@ -137,7 +137,7 @@ exports.loginStart = async (req, res) => {
             await redisClient.set(
                 `challenge:time:${userId}`,
                 String(Date.now()),
-                { EX: 300 }
+                { EX: 90 }
             );
         }
 
@@ -429,7 +429,7 @@ exports.loginFinish = async (req, res) => {
             const email = userRows[0].email;
 
             const session = await sessionManager.createSession(
-                userId, context.ip, context.userAgent, context.fingerprint, 'RE-AUTH'
+                userId, context.ip, context.userAgent, context.fingerprint, 'RE_AUTH'
             );
 
             try {

@@ -19,7 +19,7 @@ const createSession = async (userId, ipHash, deviceIdHash, fingerprintHash, init
     issuedAt: now,
     lastActivity: now,
     status: initialStatus,
-    ip: ipHash,           // F-08 비식별화 처리된 값
+    ip: ipHash,
     deviceId: deviceIdHash,
     fingerprint: fingerprintHash,
   });

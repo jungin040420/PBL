@@ -19,7 +19,13 @@ function maskEmail(email) {
 exports.generateAndSendOtp = async (userId, email) => {
   const otp = String(crypto.randomInt(100000, 1000000)); // 6자리
 
-  await redisClient.set(`reauth:${userId}`, '1', { EX: REAUTH_TTL });
+  const reauthData = JSON.stringify({
+    userId: String(userId),
+    createdAt: new Date().toISOString(),
+    status: 'PENDING',
+  });
+  
+  await redisClient.set(`reauth:${userId}`, reauthData, { EX: REAUTH_TTL });
   await redisClient.set(`reauth:otp:${userId}`, otp, { EX: REAUTH_TTL });
 
   try {
