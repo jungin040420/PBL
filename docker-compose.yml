@@ -48,7 +48,7 @@ services:
 
       # app.js에서 /client 경로를 사용하므로
       # 로컬 client 폴더를 컨테이너 /client에 연결
-      - ./client:/app/client
+      - ./client:/client
 
     networks:
       - auth_network
@@ -134,7 +134,8 @@ services:
       - auth_network
 
     restart: unless-stopped
-    
+
+
   # ==========================================================
   # MySQL
   # ==========================================================
@@ -203,7 +204,7 @@ services:
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy volatile-lru
-    
+
     volumes:
       - redis_data:/data
 
@@ -278,4 +279,3 @@ volumes:
 networks:
   auth_network:
     driver: bridge
-
