@@ -1,48 +1,41 @@
-﻿const express = require('express');
+﻿const express =
+    require('express');
 
-const router = express.Router();
+const router =
+    express.Router();
 
 const authMiddleware =
     require('../src/middleware/authMiddleware');
 
 const {
   collectContext
-} = require('../src/middleware/contextCollector');
+} =
+    require('../src/middleware/contextCollector');
 
 const sensitiveActionController =
     require('../src/controllers/sensitiveActionController');
 
 
 // ============================================================
-// CASE 3
-// 인증수단 변경 요청
+// CASE3 민감 행위 요청
 //
-// 현재 ACTIVE Session 검증
-// → Context 수집
-// → Risk Re-Evaluation
-// → RE_AUTH 또는 BLOCKED
+// 반드시:
+// collectContext → authMiddleware
 // ============================================================
 
 router.post(
     '/auth-method-change',
-    authMiddleware,
     collectContext,
+    authMiddleware,
     sensitiveActionController.requestAuthMethodChange
 );
 
 
 // ============================================================
-// CASE 3
-// RE_AUTH 전용 Context 조회
+// RE_AUTH Context 조회
 //
-// 주의:
-// authMiddleware를 사용하지 않는다.
-//
-// RE-AUTH 상태에서는 일반 authMiddleware가
-// REAUTH_REQUIRED로 차단하기 때문이다.
-//
-// 대신 Controller 내부에서
-// session + reauth PENDING 상태를 직접 검증한다.
+// RE_AUTH 세션이므로 일반 authMiddleware 사용 안 함.
+// Controller가 직접 세션 검증.
 // ============================================================
 
 router.get(
@@ -51,4 +44,18 @@ router.get(
 );
 
 
-module.exports = router;
+// ============================================================
+// CASE3 Passkey Step-up 검증
+//
+// 새 Session 생성하지 않음.
+// 기존 RE_AUTH Session 복구.
+// ============================================================
+
+router.post(
+    '/stepup/verify',
+    sensitiveActionController.verifyStepUp
+);
+
+
+module.exports =
+    router;
