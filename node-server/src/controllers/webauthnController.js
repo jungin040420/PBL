@@ -6,15 +6,13 @@ const { db, authdb, redisClient } = require('../../config/db');
 const { hashForCompare, hashUserId } = require('../utils/anonymize');
 const { encryptObject } = require('../utils/crypto');
 const otpService = require('../services/otpService');
+const { createStepupState, getStepupState, completeStepupState } = require('../services/session');
+const { updateSessionStatus: updateSessionStatusRaw } = require('../services/session');
 
 exports.registerStart = async (req, res) => {
     try {
         const { username, displayName, email } = req.body;
 
-        // 추후 코드 수정
-        //   - username 중복 체크
-        //   - 이메일 형식 검증
-        //   - 특수문자 제한 등
         if (!username || !displayName) {
             return res.status(400).json({ error: '필수 입력값 누락' });
         }
@@ -87,8 +85,6 @@ exports.registerFinish = async (req, res) => {
             console.error('[AUDIT_LOG_FAILURE] audit_logs 기록 실패(등록):', auditError.message);
         }
 
-        // 추후 코드 수정
-        //   - 등록 완료 후 바로 로그인 처리할지 여부
         return res.status(200).json({ success: true, message: '등록 완료' });
 
     } catch (error) {
@@ -259,6 +255,42 @@ exports.loginFinish = async (req, res) => {
             return res.status(401).json({
                 error: '로그인 검증 실패',
                 reason: result.reason
+            });
+        }
+
+        //step-up 완료 감지
+        const stepupState = await getStepupState(userId);
+
+        if (stepupState === 'PENDING') {
+            const currentSessionToken = req.cookies?.session;
+            if (currentSessionToken) {
+                const [tokenUserId, tokenSessionId] = currentSessionToken.split(':');
+
+                if (String(tokenUserId) === String(userId) && tokenSessionId) {
+                    const activated = await updateSessionStatusRaw(userId, tokenSessionId, 'ACTIVE');
+
+                    if (!activated) {
+                        return res.status(401).json({
+                            success: false,
+                            error: 'STEPUP_SESSION_INVALID',
+                            message: '재인증 대상 세션이 유효하지 않습니다.',
+                        });
+                    }
+
+                    await completeStepupState(userId);
+
+                    return res.status(200).json({
+                        success: true,
+                        stepupCompleted: true,
+                        message: '재인증이 완료되었습니다.',
+                    });
+                }
+            }
+
+            return res.status(401).json({
+                success: false,
+                error: 'STEPUP_SESSION_MISSING',
+                message: '다시 로그인해주세요.',
             });
         }
 

@@ -82,4 +82,22 @@ const deleteSession = async (userId, sessionId) => {
   await redisClient.del(`session:${userId}:${sessionId}`);
 };
 
-module.exports = { createSession, refreshSession, updateSessionStatus, deleteSession };
+// step-up
+const STEPUP_TTL = parseInt(process.env.STEPUP_TTL) || 180;
+
+const createStepupState = async (userId) => {
+  const key = `stepup:${userId}`;
+  await redisClient.set(key, 'PENDING', { EX: STEPUP_TTL });
+};
+
+const getStepupState = async (userId) => {
+  const key = `stepup:${userId}`;
+  return await redisClient.get(key);
+};
+
+const completeStepupState = async (userId) => {
+  const key = `stepup:${userId}`;
+  await redisClient.del(key);
+};
+
+module.exports = { createSession, refreshSession, updateSessionStatus, deleteSession, createStepupState, getStepupState, completeStepupState };
