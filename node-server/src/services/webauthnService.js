@@ -5,11 +5,9 @@ const rpId = process.env.RP_ID || 'localhost';
 
 exports.generateRegistrationOptions = async (username, displayName) => {
 
-  const { challengeId, challengeValue } = await storeChallenge(username);
+  const { challengeId, challengeValue } = await storeChallenge();
 
   const userId = crypto.randomBytes(8).toString('base64url');
-
-  
 
   return { 
     challenge: challengeValue,
@@ -21,7 +19,7 @@ exports.generateRegistrationOptions = async (username, displayName) => {
 
 exports.generateLoginOptions = async (username) => {
 
-  const { challengeId, challengeValue } = await storeChallenge(username);
+  const { challengeId, challengeValue } = await storeChallenge();
   
   //추후에 제거
   console.log('challengeId:', challengeId);            

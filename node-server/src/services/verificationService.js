@@ -16,7 +16,6 @@ exports.verifyRegistration = async (username, email, challengeId, credential, au
   console.log('submittedChallenge:', submittedChallenge);
 
   const challengeResult = await verifyChallenge(
-    username,
     challengeId,
     submittedChallenge
   );
@@ -96,7 +95,6 @@ exports.verifyLogin = async (username, challengeId, credential) => {
   console.log('submittedChallenge:', submittedChallenge);
 
   const challengeResult = await verifyChallenge(
-    username,
     challengeId,
     submittedChallenge
   );

@@ -131,11 +131,19 @@ exports.loginStart = async (req, res) => {
             return res.status(400).json({ error: '아이디를 입력하세요' });
         }
 
-        await redisClient.set(
-            `challenge:time:${username}`,
-            String(Date.now()),
-            { EX: 300 }
+        const [rows] = await db.query(
+            `SELECT id FROM users WHERE username = ? LIMIT 1`,
+            [username]
         );
+        const userId = rows[0]?.id ?? null;
+
+        if (userId) {
+            await redisClient.set(
+                `challenge:time:${userId}`,
+                String(Date.now()),
+                { EX: 300 }
+            );
+        }
 
         const options = await webauthnService.generateLoginOptions(username);
         return res.status(200).json(options);
@@ -153,12 +161,18 @@ exports.loginFinish = async (req, res) => {
         const context = req.context || {};
         context.fingerprint = fingerprint;
 
-        const startTime = await redisClient.get(`challenge:time:${username}`);
+        const [userRows] = await db.query(
+            `SELECT id, email FROM users WHERE username = ? LIMIT 1`,
+            [username]
+        );
+        const userId = userRows[0]?.id ?? null;
+
+        const startTime = await redisClient.get(`challenge:time:${userId}`);
         const challengeResponseTime = startTime
             ? Date.now() - parseInt(startTime, 10)
             : null;
         context.challengeResponseTime = challengeResponseTime;
-        await redisClient.del(`challenge:time:${username}`);
+        await redisClient.del(`challenge:time:${userId}`);
 
         context.loginRegion = context.country || 'KR';
 
@@ -196,9 +210,9 @@ exports.loginFinish = async (req, res) => {
             context.signCountAbnormal = result.signCountAbnormal || false;
             context.credentialMismatch = result.credentialMismatch || false;
 
-            const consecutiveFailureCount = parseInt(
-                await redisClient.get(`login:fail:${username}`)
-            ) || 0;
+            const consecutiveFailureCount = userId ? parseInt(
+                await redisClient.get(`login:fail:${userId}`)
+            ) || 0 : 0;
             context.consecutiveFailureCount = consecutiveFailureCount;
             context.failedLoginCount = consecutiveFailureCount;
 
@@ -231,8 +245,10 @@ exports.loginFinish = async (req, res) => {
             const failCurrentType = credential?.authenticatorAttachment || 'unknown';
             context.authenticationMethodChanged = (!registeredPasskey || failCurrentType === 'unknown');
 
-            await redisClient.incr(`login:fail:${username}`);
-            await redisClient.expire(`login:fail:${username}`, 3600);
+            if (userId) {
+                await redisClient.incr(`login:fail:${userId}`);
+                await redisClient.expire(`login:fail:${userId}`, 3600);
+            }
 
             try {
                 await sendRiskData(username, context);
@@ -247,16 +263,12 @@ exports.loginFinish = async (req, res) => {
         }
 
         // 로그이 성공 시
-        const [rows] = await db.query(
-            `SELECT id, username, email FROM users WHERE username = ? LIMIT 1`,
-            [username]
-        );
-        if (!rows || rows.length === 0) {
+        if (!userId) {
             return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
         }
 
         const failedLoginCount = parseInt(
-            await redisClient.get(`login:fail:${username}`), 10
+            await redisClient.get(`login:fail:${userId}`), 10
         ) || 0;
         context.failedLoginCount = failedLoginCount;
         context.consecutiveFailureCount = failedLoginCount;
@@ -269,7 +281,7 @@ exports.loginFinish = async (req, res) => {
         const blacklistStatus = await redisClient.get(`blacklist:ip:${blacklistIpHash}`);
         context.blacklistIpDetected = blacklistStatus === '1';
 
-        await redisClient.del(`login:fail:${username}`);
+        await redisClient.del(`login:fail:${userId}`);
 
         const userIdHash = hashUserId(username);
         const contextKey = `lastcontext:${userIdHash}`;
@@ -334,8 +346,8 @@ exports.loginFinish = async (req, res) => {
             console.error('[AUDIT_LOG_FAILURE] audit_logs 기록 실패:', auditError.message);
         }
 
-        const loginFrequency = await redisClient.incr(`login:count:${username}`);
-        await redisClient.expire(`login:count:${username}`, 3600);
+        const loginFrequency = await redisClient.incr(`login:count:${userId}`);
+        await redisClient.expire(`login:count:${userId}`, 3600);
         context.loginFrequency = loginFrequency;
 
         // 리스크 스코어
@@ -382,8 +394,7 @@ exports.loginFinish = async (req, res) => {
         }
 
         if (riskAction === 'RE_AUTH') {
-            const userId = rows[0].id;
-            const email = rows[0].email;
+            const email = userRows[0].email;
 
             const session = await sessionManager.createSession(
                 userId, context.ip, context.userAgent, context.fingerprint, 'RE-AUTH'
@@ -423,7 +434,7 @@ exports.loginFinish = async (req, res) => {
         }
 
         const session = await sessionManager.createSession(
-            rows[0].id, context.ip, context.userAgent, fingerprint
+            userId, context.ip, context.userAgent, fingerprint
         );
         console.log('세션 생성 결과:', session);
 

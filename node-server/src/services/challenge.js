@@ -5,10 +5,10 @@ const { v4: uuidv4 } = require('uuid');
 const CHALLENGE_TTL = parseInt(process.env.CHALLENGE_TTL) || 60;
 
 // challenge 생성 및 Redis 저장
-const storeChallenge = async (userId) => {
+const storeChallenge = async () => {
   const challengeId = uuidv4();
   const challengeValue = crypto.randomBytes(32).toString('base64url');
-  const key = `challenge:${userId}:${challengeId}`;
+  const key = `challenge:${challengeId}`;
 
   const data = JSON.stringify({
     challengeValue,
@@ -21,12 +21,12 @@ const storeChallenge = async (userId) => {
 };
 
 // challenge 검증 + 사용 처리 (재사용 공격 방지)
-const verifyChallenge = async (userId, challengeId, submittedValue) => {
-  const key = `challenge:${userId}:${challengeId}`;
+const verifyChallenge = async (challengeId, submittedValue) => {
+  const key = `challenge:${challengeId}`;
   console.log('조회할 key:', key);
 
   const raw = await redisClient.get(key);
-  console.log('Redis에서 조회된 값:', raw);
+  console.log('Redis에서 조회된 값:', raw); //최종 삭제
 
   if (!raw) return { valid: false, reason: 'EXPIRED_OR_NOT_FOUND' };
 
