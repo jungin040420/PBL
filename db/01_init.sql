@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
   public_key     TEXT         NOT NULL,
   counter        INT          DEFAULT 0,
   created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  authenticator_type VARCHAR(50)  DEFAULT 'unknown',
   is_active      TINYINT(1)   DEFAULT 1,
 
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
