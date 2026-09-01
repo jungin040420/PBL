@@ -31,3 +31,6 @@ Thumbs.db
 
 # IntelliJ
 .idea/
+
+#데이터셋
+*.csv

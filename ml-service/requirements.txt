@@ -4,4 +4,4 @@ playwright
 joblib
 pandas
 numpy
-scikit-learn
+scikit-learng
