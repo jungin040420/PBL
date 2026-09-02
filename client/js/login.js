@@ -113,7 +113,7 @@ async function startPasskeyLogin() {
       showReauthUI();
 
     } else {
-      setStatus('로그인 실패: ' + loginResult.error);
+      setStatus('로그인 실패: ' + (loginResult.message || loginResult.error || '위험도가 높아 로그인이 차단되었습니다.'));
     }
 
   } catch (error) {
