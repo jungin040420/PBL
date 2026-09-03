@@ -2,8 +2,10 @@ const requestIp = require('request-ip');
 
 const collectContext = (req, res, next) => {
   const now = new Date();
+
   const ip = requestIp.getClientIp(req) || req.ip;
-  const userAgent = req.headers['user-agent'] || 'unknown'; 
+  const userAgent = req.headers['user-agent'] || 'unknown';
+
   const deviceInfo = parseUserAgent(userAgent);
   const accessTime = new Date().toISOString();
   const hour = new Date().getHours();
@@ -13,8 +15,27 @@ const collectContext = (req, res, next) => {
   const country = 'KR';
 
   req.context = {
-    ip, userAgent, deviceInfo, accessTime, isNightAccess, loginHour, dayOfWeek, country
+    ip,
+    userAgent,
+    deviceInfo,
+    accessTime,
+    isNightAccess,
+    loginHour,
+    dayOfWeek,
+    country
   };
+
+
+  console.log('수집한 컨텍스트:', {
+    hasIp: Boolean(ip),
+    hasUserAgent: Boolean(userAgent),
+    deviceInfo,
+    accessTime,
+    isNightAccess,
+    loginHour,
+    dayOfWeek,
+    country
+  });
 
   next();
 };
@@ -28,16 +49,39 @@ const parseUserAgent = (userAgent) => {
   const isIOS = /iphone|ipad/i.test(userAgent);
 
   let deviceType = 'desktop';
-  if (isMobile) deviceType = 'mobile';
-  if (isTablet) deviceType = 'tablet';
+
+  if (isMobile) {
+    deviceType = 'mobile';
+  }
+
+  if (isTablet) {
+    deviceType = 'tablet';
+  }
 
   let os = 'unknown';
-  if (isWindows) os = 'windows';
-  if (isMac) os = 'mac';
-  if (isAndroid) os = 'android';
-  if (isIOS) os = 'ios'; 
 
-  return { deviceType, os };
+  if (isWindows) {
+    os = 'windows';
+  }
+
+  if (isMac) {
+    os = 'mac';
+  }
+
+  if (isAndroid) {
+    os = 'android';
+  }
+
+  if (isIOS) {
+    os = 'ios';
+  }
+
+  return {
+    deviceType,
+    os
+  };
 };
 
-module.exports = { collectContext };
+module.exports = {
+  collectContext
+};
