@@ -16,7 +16,6 @@ const collectContext = (req, res, next) => {
     ip, userAgent, deviceInfo, accessTime, isNightAccess, loginHour, dayOfWeek, country
   };
 
-  console.log('수집한 컨텍스트:', req.context);
   next();
 };
 
