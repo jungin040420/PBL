@@ -150,7 +150,13 @@ async def analyze_url(url):
 
         try:
             browser = await p.chromium.launch(
-                headless=True
+                headless=True,
+                args=[
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--single-process",
+                ]
             )
 
             context = await browser.new_context(
