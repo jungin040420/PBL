@@ -22,10 +22,12 @@ from app.isolation_model import (
 app = FastAPI(
     title="Hybrid Risk Score API",
     description=(
-        "Rule 기반 Risk Score와 Isolation Forest 이상 탐지를 이용해 "
-        "로그인 위험도를 분석하고 ML Feature 및 Prediction을 저장합니다."
+        "논문 기반 Rule-Based Trust Score와 "
+        "Isolation Forest 이상 탐지를 이용해 "
+        "로그인 위험도를 분석하고 "
+        "ML Feature 및 Prediction을 저장합니다."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
 
 
@@ -516,12 +518,6 @@ def save_ml_feature_log(
 
 # ============================================================
 # ML Prediction 저장
-#
-# ml_feature_logs와 같은 event_id를 사용한다.
-#
-# top_anomaly_features:
-# 현재 Isolation Forest에서 개별 Feature 기여도를
-# 직접 산출하지 않으므로 NULL로 저장한다.
 # ============================================================
 
 def save_ml_prediction(
@@ -562,23 +558,11 @@ def save_ml_prediction(
         )
     )
 
-    model_type = (
-        ml_result.get(
-            "ml_model_type"
-        )
-    )
-
     anomaly_label = (
         "ANOMALY"
         if is_anomaly is True
         else "NORMAL"
     )
-
-    # --------------------------------------------------------
-    # Metadata에서 model_version이 존재하면 사용하고,
-    # 없으면 현재 최종 16 Feature REAL 모델임을 나타내는
-    # fallback 버전을 사용한다.
-    # --------------------------------------------------------
 
     model_version = (
         ml_result.get(
@@ -722,10 +706,6 @@ def run_ml_analysis(
         or "iforest-real-16f-v1"
     )
 
-    # --------------------------------------------------------
-    # SYNTHETIC 모델은 실제 로그인 판정에 사용하지 않는다.
-    # --------------------------------------------------------
-
     if model_type != "REAL":
 
         print(
@@ -753,9 +733,6 @@ def run_ml_analysis(
 
     # ========================================================
     # 최종 확정 16개 ML Feature
-    #
-    # isolation_model.py FEATURE_ORDER와
-    # 반드시 동일한 이름을 사용한다.
     # ========================================================
 
     features = {
@@ -822,6 +799,11 @@ def run_ml_analysis(
         "hasPreviousContext":
             data.hasPreviousContext,
     }
+
+    print(
+        "16개 Risk Feature 입력:",
+        features,
+    )
 
     try:
 
@@ -1043,10 +1025,6 @@ def save_risk_log(
             risk_response.ml_is_anomaly,
     }
 
-    # ========================================================
-    # JSONL 저장
-    # ========================================================
-
     try:
 
         with LOG_FILE.open(
@@ -1072,10 +1050,6 @@ def save_risk_log(
             "Python 로컬 로그 저장 실패:",
             error,
         )
-
-    # ========================================================
-    # Elasticsearch
-    # ========================================================
 
     try:
 
@@ -1173,57 +1147,520 @@ def read_root():
 
 
 # ============================================================
-# Rule Score
+# 논문 기반 Rule-Based Trust Score
+#
+# TS = WB * B + WN * N + WD * D + WT * T
+#
+# WB = 0.4
+# WN = 0.3
+# WD = 0.2
+# WT = 0.1
 # ============================================================
 
-def calculate_login_frequency_score(
+WB = 0.4
+WN = 0.3
+WD = 0.2
+WT = 0.1
+
+
+def clamp_score(
+    value: float,
+) -> float:
+
+    return max(
+        0.0,
+        min(
+            float(value),
+            100.0,
+        ),
+    )
+
+
+# ============================================================
+# 기존 Rule 임계값을 0~100 위험도로 정규화
+# ============================================================
+
+def normalize_login_frequency(
     login_frequency: int,
-) -> int:
+) -> float:
 
     if login_frequency >= 10:
-        return 15
+        return 100.0
 
     if login_frequency >= 5:
-        return 10
+        return 67.0
 
     if login_frequency >= 3:
-        return 5
+        return 33.0
 
-    return 0
+    return 0.0
 
 
-def calculate_login_failure_score(
+def normalize_login_failure(
     login_failures: int,
-) -> int:
+) -> float:
 
     if login_failures >= 5:
-        return 25
+        return 100.0
 
     if login_failures >= 3:
-        return 15
+        return 60.0
 
     if login_failures >= 1:
-        return 5
+        return 20.0
 
-    return 0
+    return 0.0
 
 
-def calculate_response_time_score(
+def normalize_response_time(
     challenge_response_time:
         Optional[float],
-) -> int:
+) -> float:
 
     if challenge_response_time is None:
-        return 0
+        return 0.0
 
-    if 0 < challenge_response_time < 300:
-        return 10
+    if (
+        0
+        < challenge_response_time
+        < 300
+    ):
+        return 100.0
 
     if challenge_response_time > 5000:
-        return 5
+        return 50.0
 
-    return 0
+    return 0.0
 
+
+def normalize_login_hour(
+    login_hour: int,
+) -> float:
+
+    if (
+        0
+        <= login_hour
+        <= 5
+    ):
+        return 100.0
+
+    return 0.0
+
+
+def boolean_risk(
+    value: bool,
+) -> float:
+
+    if value:
+        return 100.0
+
+    return 0.0
+
+
+def average_score(
+    values: List[float],
+) -> float:
+
+    if not values:
+        return 0.0
+
+    return (
+        sum(values)
+        / len(values)
+    )
+
+
+# ============================================================
+# 논문 기반 B / N / D / T 영역 점수
+# ============================================================
+
+def calculate_trust_score(
+    data: LogData,
+) -> tuple[
+    int,
+    Dict[str, int],
+    List[str],
+]:
+
+    # ========================================================
+    # B - Behavior
+    #
+    # 로그인 빈도
+    # 로그인 실패 횟수
+    # Challenge 응답시간
+    # 로그인 시간대
+    # ========================================================
+
+    behavior_score = average_score(
+        [
+            normalize_login_frequency(
+                data.loginFrequency
+            ),
+
+            normalize_login_failure(
+                data.failedLoginCount
+            ),
+
+            normalize_response_time(
+                data.challengeResponseTime
+            ),
+
+            normalize_login_hour(
+                data.loginHour
+            ),
+        ]
+    )
+
+
+    # ========================================================
+    # N - Network
+    #
+    # IP 변경
+    # 지역 변경
+    # ========================================================
+
+    network_score = average_score(
+        [
+            boolean_risk(
+                data.ipChanged
+            ),
+
+            boolean_risk(
+                data.regionChanged
+            ),
+        ]
+    )
+
+
+    # ========================================================
+    # D - Device / Credential
+    #
+    # signCount 이상
+    # Credential 불일치
+    # User-Agent 변경
+    # 신규 기기
+    # ========================================================
+
+    device_score = average_score(
+        [
+            boolean_risk(
+                data.signCountAbnormal
+            ),
+
+            boolean_risk(
+                data.credentialMismatch
+            ),
+
+            boolean_risk(
+                data.userAgentChanged
+            ),
+
+            boolean_risk(
+                data.isNewDevice
+            ),
+        ]
+    )
+
+
+    # ========================================================
+    # T - Threat History
+    #
+    # 연속 로그인 실패
+    # Blacklist IP
+    # ========================================================
+
+    threat_score = average_score(
+        [
+            normalize_login_failure(
+                data.consecutiveFailureCount
+            ),
+
+            boolean_risk(
+                data.blacklistIpDetected
+            ),
+        ]
+    )
+
+
+    # ========================================================
+    # 논문 가중합 공식
+    #
+    # TS = 0.4B + 0.3N + 0.2D + 0.1T
+    # ========================================================
+
+    weighted_behavior = (
+        WB
+        * behavior_score
+    )
+
+    weighted_network = (
+        WN
+        * network_score
+    )
+
+    weighted_device = (
+        WD
+        * device_score
+    )
+
+    weighted_threat = (
+        WT
+        * threat_score
+    )
+
+
+    rule_score = (
+        weighted_behavior
+        + weighted_network
+        + weighted_device
+        + weighted_threat
+    )
+
+
+    rule_score = int(
+        round(
+            clamp_score(
+                rule_score
+            )
+        )
+    )
+
+
+    feature_scores: Dict[str, int] = {
+
+        "B_behavior":
+            int(
+                round(
+                    behavior_score
+                )
+            ),
+
+        "N_network":
+            int(
+                round(
+                    network_score
+                )
+            ),
+
+        "D_device":
+            int(
+                round(
+                    device_score
+                )
+            ),
+
+        "T_threat":
+            int(
+                round(
+                    threat_score
+                )
+            ),
+
+        "WB_B":
+            int(
+                round(
+                    weighted_behavior
+                )
+            ),
+
+        "WN_N":
+            int(
+                round(
+                    weighted_network
+                )
+            ),
+
+        "WD_D":
+            int(
+                round(
+                    weighted_device
+                )
+            ),
+
+        "WT_T":
+            int(
+                round(
+                    weighted_threat
+                )
+            ),
+    }
+
+
+    triggers: List[str] = []
+
+
+    if data.loginFrequency >= 3:
+
+        triggers.append(
+            "HIGH_LOGIN_FREQUENCY"
+        )
+
+
+    if data.failedLoginCount >= 1:
+
+        triggers.append(
+            "LOGIN_FAILURE"
+        )
+
+
+    if (
+        data.challengeResponseTime
+        is not None
+        and
+        (
+            (
+                0
+                < data.challengeResponseTime
+                < 300
+            )
+            or
+            data.challengeResponseTime
+            > 5000
+        )
+    ):
+
+        triggers.append(
+            "ABNORMAL_RESPONSE_TIME"
+        )
+
+
+    if (
+        0
+        <= data.loginHour
+        <= 5
+    ):
+
+        triggers.append(
+            "ODD_HOUR"
+        )
+
+
+    if data.ipChanged:
+
+        triggers.append(
+            "IP_CHANGED"
+        )
+
+
+    if data.regionChanged:
+
+        triggers.append(
+            "REGION_CHANGED"
+        )
+
+
+    if data.signCountAbnormal:
+
+        triggers.append(
+            "SIGN_COUNT_ABNORMAL"
+        )
+
+
+    if data.credentialMismatch:
+
+        triggers.append(
+            "CREDENTIAL_MISMATCH"
+        )
+
+
+    if data.userAgentChanged:
+
+        triggers.append(
+            "USER_AGENT_CHANGED"
+        )
+
+
+    if data.isNewDevice:
+
+        triggers.append(
+            "NEW_DEVICE"
+        )
+
+
+    if data.consecutiveFailureCount >= 1:
+
+        triggers.append(
+            "CONSECUTIVE_LOGIN_FAILURE"
+        )
+
+
+    if data.blacklistIpDetected:
+
+        triggers.append(
+            "BLACKLIST_IP"
+        )
+
+
+    print(
+        "Rule-Based Trust Score:",
+        {
+            "formula":
+                "TS = 0.4B + 0.3N + 0.2D + 0.1T",
+
+            "B":
+                round(
+                    behavior_score,
+                    2,
+                ),
+
+            "N":
+                round(
+                    network_score,
+                    2,
+                ),
+
+            "D":
+                round(
+                    device_score,
+                    2,
+                ),
+
+            "T":
+                round(
+                    threat_score,
+                    2,
+                ),
+
+            "WB_B":
+                round(
+                    weighted_behavior,
+                    2,
+                ),
+
+            "WN_N":
+                round(
+                    weighted_network,
+                    2,
+                ),
+
+            "WD_D":
+                round(
+                    weighted_device,
+                    2,
+                ),
+
+            "WT_T":
+                round(
+                    weighted_threat,
+                    2,
+                ),
+
+            "rule_score":
+                rule_score,
+        }
+    )
+
+
+    return (
+        rule_score,
+        feature_scores,
+        triggers,
+    )
+
+
+# ============================================================
+# 최종 인증 정책
+# ============================================================
 
 def determine_authentication_policy(
     score: int,
@@ -1266,8 +1703,6 @@ def calculate_risk(
 
     # ========================================================
     # 로그인 이벤트 ID
-    #
-    # 이 요청 전체에서 하나의 event_id만 사용한다.
     # ========================================================
 
     event_id = (
@@ -1279,229 +1714,25 @@ def calculate_risk(
         event_id,
     )
 
-    score = 0
-
-    triggers: List[str] = []
-
-    feature_scores: Dict[str, int] = {}
-
 
     # ========================================================
-    # 로그인 빈도
+    # 논문 기반 Rule-Based Trust Score
+    #
+    # TS = 0.4B + 0.3N + 0.2D + 0.1T
     # ========================================================
 
-    login_frequency_score = (
-        calculate_login_frequency_score(
-            data.loginFrequency
-        )
+    (
+        score,
+        feature_scores,
+        triggers,
+    ) = calculate_trust_score(
+        data
     )
 
-    if login_frequency_score > 0:
 
-        score += (
-            login_frequency_score
-        )
-
-        triggers.append(
-            "HIGH_LOGIN_FREQUENCY"
-        )
-
-        feature_scores[
-            "loginFrequency"
-        ] = login_frequency_score
-
-
-    # ========================================================
-    # 로그인 실패
-    # ========================================================
-
-    login_failure_score = (
-        calculate_login_failure_score(
-            data.failedLoginCount
-        )
-    )
-
-    if login_failure_score > 0:
-
-        score += (
-            login_failure_score
-        )
-
-        triggers.append(
-            "LOGIN_FAILURE"
-        )
-
-        feature_scores[
-            "failedLoginCount"
-        ] = login_failure_score
-
-
-    # ========================================================
-    # IP 변경
-    # ========================================================
-
-    if data.ipChanged:
-
-        ip_score = 20
-
-        score += ip_score
-
-        triggers.append(
-            "IP_CHANGED"
-        )
-
-        feature_scores[
-            "ipChanged"
-        ] = ip_score
-
-
-    # ========================================================
-    # User-Agent 변경
-    # ========================================================
-
-    if data.userAgentChanged:
-
-        user_agent_score = 10
-
-        score += (
-            user_agent_score
-        )
-
-        triggers.append(
-            "USER_AGENT_CHANGED"
-        )
-
-        feature_scores[
-            "userAgentChanged"
-        ] = user_agent_score
-
-
-    # ========================================================
-    # 신규 기기
-    # ========================================================
-
-    if data.isNewDevice:
-
-        device_score = 20
-
-        score += (
-            device_score
-        )
-
-        triggers.append(
-            "NEW_DEVICE"
-        )
-
-        feature_scores[
-            "isNewDevice"
-        ] = device_score
-
-
-    # ========================================================
-    # 지역 변경
-    # ========================================================
-
-    if data.regionChanged:
-
-        region_score = 10
-
-        score += (
-            region_score
-        )
-
-        triggers.append(
-            "REGION_CHANGED"
-        )
-
-        feature_scores[
-            "regionChanged"
-        ] = region_score
-
-
-    # ========================================================
-    # 해외 접속
-    # ========================================================
-
-    if (
-        data.country.upper()
-        != "KR"
-    ):
-
-        country_score = 10
-
-        score += (
-            country_score
-        )
-
-        triggers.append(
-            "FOREIGN_COUNTRY"
-        )
-
-        feature_scores[
-            "foreignCountry"
-        ] = country_score
-
-
-    # ========================================================
-    # Challenge 응답 시간
-    # ========================================================
-
-    response_time_score = (
-        calculate_response_time_score(
-            data.challengeResponseTime
-        )
-    )
-
-    if response_time_score > 0:
-
-        score += (
-            response_time_score
-        )
-
-        triggers.append(
-            "ABNORMAL_RESPONSE_TIME"
-        )
-
-        feature_scores[
-            "challengeResponseTime"
-        ] = response_time_score
-
-
-    # ========================================================
-    # 새벽 로그인
-    # ========================================================
-
-    if (
-        0
-        <= data.loginHour
-        <= 5
-    ):
-
-        odd_hour_score = 5
-
-        score += (
-            odd_hour_score
-        )
-
-        triggers.append(
-            "ODD_HOUR"
-        )
-
-        feature_scores[
-            "loginHour"
-        ] = odd_hour_score
-
-
-    # ========================================================
-    # Rule Score 제한
-    # ========================================================
-
-    score = max(
-        0,
-        min(
-            score,
-            100,
-        ),
+    print(
+        "Rule-Based Risk Score 산출 완료:",
+        score,
     )
 
 
@@ -1515,6 +1746,16 @@ def calculate_risk(
         )
     )
 
+
+    # ========================================================
+    # Hybrid Risk
+    #
+    # NORMAL
+    #   -> 기존 Rule Score 유지
+    #
+    # ANOMALY
+    #   -> Rule Score + 20
+    # ========================================================
 
     if (
         ml_result[
@@ -1624,8 +1865,6 @@ def calculate_risk(
 
     # ========================================================
     # REAL Feature 저장
-    #
-    # 동일 event_id 사용
     # ========================================================
 
     save_ml_feature_log(
@@ -1636,8 +1875,6 @@ def calculate_risk(
 
     # ========================================================
     # ML Prediction 저장
-    #
-    # 동일 event_id 사용
     # ========================================================
 
     save_ml_prediction(
@@ -1647,9 +1884,7 @@ def calculate_risk(
 
 
     # ========================================================
-    # Risk 로그
-    #
-    # 동일 event_id 사용
+    # Risk 로그 저장
     # ========================================================
 
     save_risk_log(
@@ -1664,6 +1899,9 @@ def calculate_risk(
         {
             "event_id":
                 event_id,
+
+            "formula":
+                "TS = 0.4B + 0.3N + 0.2D + 0.1T",
 
             "risk_score":
                 score,
