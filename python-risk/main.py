@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -22,12 +22,12 @@ from app.isolation_model import (
 app = FastAPI(
     title="Hybrid Risk Score API",
     description=(
-        "논문 기반 Rule-Based Trust Score와 "
+        "B/N/D/T/C 기반 Rule-Based Trust Score와 "
         "Isolation Forest 이상 탐지를 이용해 "
         "로그인 위험도를 분석하고 "
         "ML Feature 및 Prediction을 저장합니다."
     ),
-    version="2.1.0",
+    version="2.3.0",
 )
 
 
@@ -35,13 +35,76 @@ app = FastAPI(
 # 기본 설정
 # ============================================================
 
-LOG_FILE = Path(
-    "risk_logs.jsonl"
-)
-
 ELASTICSEARCH_URL = os.getenv(
     "ELASTICSEARCH_URL",
     "http://elasticsearch:9200/risk-logs/_doc",
+)
+
+
+# ============================================================
+# Risk 인증 정책 환경변수
+#
+# 기본값:
+# 0 ~ 30   = ACTIVE
+# 31 ~ 69  = RE_AUTH
+# 70 ~ 100 = BLOCKED
+#
+# F-07 기준:
+# 운영 시 환경변수로 조정 가능하도록 구성
+# ============================================================
+
+RISK_LOW_MAX = int(
+    os.getenv(
+        "RISK_LOW_MAX",
+        "30",
+    )
+)
+
+RISK_MEDIUM_MAX = int(
+    os.getenv(
+        "RISK_MEDIUM_MAX",
+        "69",
+    )
+)
+
+
+if not (
+    0
+    <= RISK_LOW_MAX
+    < RISK_MEDIUM_MAX
+    <= 100
+):
+    raise RuntimeError(
+        "Risk 임계값 설정이 올바르지 않습니다. "
+        "0 <= RISK_LOW_MAX < "
+        "RISK_MEDIUM_MAX <= 100 이어야 합니다."
+    )
+
+
+# ============================================================
+# 로컬 Risk 로그 보관 정책
+#
+# F-08 / F-09 기준:
+# - 날짜 단위 로테이션
+# - 6개월(180일) 보관
+# - 초과 파일 자동 삭제
+#
+# 예:
+# /app/risk_logs/risk_logs_2026-09-04.jsonl
+# ============================================================
+
+RISK_LOG_DIR = Path(
+    os.getenv(
+        "RISK_LOG_DIR",
+        "risk_logs",
+    )
+)
+
+RISK_LOG_RETENTION_DAYS = int(
+    os.getenv(
+        "RISK_LOG_RETENTION_DAYS",
+        "180",
+    )
 )
 
 
@@ -109,6 +172,25 @@ print(
     ELASTICSEARCH_URL,
 )
 
+print(
+    "Risk 정책 설정:",
+    {
+        "low_max":
+            RISK_LOW_MAX,
+
+        "medium_max":
+            RISK_MEDIUM_MAX,
+
+        "log_retention_days":
+            RISK_LOG_RETENTION_DAYS,
+
+        "log_dir":
+            str(
+                RISK_LOG_DIR
+            ),
+    }
+)
+
 
 # ============================================================
 # Request Model
@@ -167,6 +249,8 @@ class LogData(BaseModel):
 
     authenticationMethodChanged: bool = False
 
+    hasPreviousContext: bool = False
+
     # ========================================================
     # N - Network
     # ========================================================
@@ -199,7 +283,7 @@ class LogData(BaseModel):
     blacklistIpDetected: bool = False
 
     # ========================================================
-    # Time
+    # C - Context
     # ========================================================
 
     loginHour: int = Field(
@@ -214,17 +298,11 @@ class LogData(BaseModel):
         le=6,
     )
 
-    # ========================================================
-    # Context
-    # ========================================================
-
     loginRegion: str = Field(
         default="KR",
         min_length=2,
         max_length=32,
     )
-
-    hasPreviousContext: bool = False
 
 
 # ============================================================
@@ -262,14 +340,6 @@ class RiskResponse(BaseModel):
 
 # ============================================================
 # Event ID
-#
-# 요청 1건당 딱 1번 생성한다.
-#
-# 동일 event_id를:
-# - ml_feature_logs
-# - ml_predictions
-# - risk_logs
-# 에 공통으로 사용한다.
 # ============================================================
 
 def generate_event_id() -> str:
@@ -283,13 +353,6 @@ def generate_event_id() -> str:
 
 # ============================================================
 # loginRegion ML Encoding
-#
-# DB:
-#   KR 등의 문자열 그대로 저장
-#
-# ML:
-#   KR = 0
-#   기타 = 1
 # ============================================================
 
 def encode_login_region(
@@ -305,6 +368,96 @@ def encode_login_region(
         return 0
 
     return 1
+
+
+# ============================================================
+# Risk 로그 파일 관리
+# ============================================================
+
+def get_current_risk_log_file() -> Path:
+
+    RISK_LOG_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    current_date = datetime.now(
+        timezone.utc
+    ).strftime(
+        "%Y-%m-%d"
+    )
+
+    return (
+        RISK_LOG_DIR
+        / f"risk_logs_{current_date}.jsonl"
+    )
+
+
+def cleanup_expired_risk_logs() -> None:
+
+    try:
+
+        RISK_LOG_DIR.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        cutoff_time = (
+            datetime.now(
+                timezone.utc
+            )
+            - timedelta(
+                days=RISK_LOG_RETENTION_DAYS
+            )
+        )
+
+        for log_file in RISK_LOG_DIR.glob(
+            "risk_logs_*.jsonl"
+        ):
+
+            try:
+
+                date_text = (
+                    log_file.stem
+                    .replace(
+                        "risk_logs_",
+                        "",
+                    )
+                )
+
+                log_date = datetime.strptime(
+                    date_text,
+                    "%Y-%m-%d",
+                ).replace(
+                    tzinfo=timezone.utc
+                )
+
+                if log_date < cutoff_time:
+
+                    log_file.unlink()
+
+                    print(
+                        "만료 Risk 로그 삭제:",
+                        log_file.name,
+                    )
+
+            except (
+                ValueError,
+                OSError,
+            ) as error:
+
+                print(
+                    "Risk 로그 정리 건너뜀:",
+                    log_file.name,
+                    error,
+                )
+
+    except OSError as error:
+
+        print(
+            "Risk 로그 디렉터리 정리 실패:",
+            error,
+        )
 
 
 # ============================================================
@@ -334,9 +487,6 @@ def create_ml_db_connection():
 
 # ============================================================
 # MySQL REAL Feature 저장
-#
-# event_id는 외부에서 전달받는다.
-# 새 event_id를 여기서 생성하지 않는다.
 # ============================================================
 
 def save_ml_feature_log(
@@ -674,8 +824,7 @@ def run_ml_analysis(
     if not metadata:
 
         print(
-            "ML 추론 건너뜀: "
-            "모델 metadata 없음"
+            "ML 추론 건너뜀: 모델 metadata 없음"
         )
 
         return {
@@ -731,13 +880,10 @@ def run_ml_analysis(
                 None,
         }
 
-    # ========================================================
-    # 최종 확정 16개 ML Feature
-    # ========================================================
-
     features = {
 
-        # B
+        # B - Behavior
+
         "loginFrequency":
             data.loginFrequency,
 
@@ -756,14 +902,19 @@ def run_ml_analysis(
         "authenticationMethodChanged":
             data.authenticationMethodChanged,
 
-        # N
+        "hasPreviousContext":
+            data.hasPreviousContext,
+
+        # N - Network
+
         "ipChanged":
             data.ipChanged,
 
         "regionChanged":
             data.regionChanged,
 
-        # D
+        # D - Device
+
         "signCountAbnormal":
             data.signCountAbnormal,
 
@@ -776,28 +927,26 @@ def run_ml_analysis(
         "isNewDevice":
             data.isNewDevice,
 
-        # T
+        # T - Threat
+
         "consecutiveFailureCount":
             data.consecutiveFailureCount,
 
         "blacklistIpDetected":
             data.blacklistIpDetected,
 
-        # Time
+        # C - Context
+
         "loginHour":
             data.loginHour,
 
         "dayOfWeek":
             data.dayOfWeek,
 
-        # Context
         "loginRegion":
             encode_login_region(
                 data.loginRegion
             ),
-
-        "hasPreviousContext":
-            data.hasPreviousContext,
     }
 
     print(
@@ -942,7 +1091,6 @@ def save_risk_log(
         "country":
             data.country,
 
-        # B
         "loginFrequency":
             data.loginFrequency,
 
@@ -955,14 +1103,15 @@ def save_risk_log(
         "authenticationMethodChanged":
             data.authenticationMethodChanged,
 
-        # N
+        "hasPreviousContext":
+            data.hasPreviousContext,
+
         "ipChanged":
             data.ipChanged,
 
         "regionChanged":
             data.regionChanged,
 
-        # D
         "signCountAbnormal":
             data.signCountAbnormal,
 
@@ -975,28 +1124,21 @@ def save_risk_log(
         "isNewDevice":
             data.isNewDevice,
 
-        # T
         "consecutiveFailureCount":
             data.consecutiveFailureCount,
 
         "blacklistIpDetected":
             data.blacklistIpDetected,
 
-        # Time
         "loginHour":
             data.loginHour,
 
         "dayOfWeek":
             data.dayOfWeek,
 
-        # Context
         "loginRegion":
             data.loginRegion,
 
-        "hasPreviousContext":
-            data.hasPreviousContext,
-
-        # 결과
         "risk_score":
             risk_response.risk_score,
 
@@ -1025,9 +1167,20 @@ def save_risk_log(
             risk_response.ml_is_anomaly,
     }
 
+
+    # ========================================================
+    # 로컬 JSONL 저장
+    # ========================================================
+
     try:
 
-        with LOG_FILE.open(
+        cleanup_expired_risk_logs()
+
+        log_file = (
+            get_current_risk_log_file()
+        )
+
+        with log_file.open(
             "a",
             encoding="utf-8",
         ) as file:
@@ -1041,7 +1194,8 @@ def save_risk_log(
             )
 
         print(
-            "Python 로컬 Risk 로그 저장 성공"
+            "Python 로컬 Risk 로그 저장 성공:",
+            log_file.name,
         )
 
     except OSError as error:
@@ -1050,6 +1204,11 @@ def save_risk_log(
             "Python 로컬 로그 저장 실패:",
             error,
         )
+
+
+    # ========================================================
+    # Elasticsearch 저장
+    # ========================================================
 
     try:
 
@@ -1100,6 +1259,33 @@ def read_root():
         "docs":
             "/docs",
 
+        "rule_formula":
+            (
+                "TS = 0.30B + 0.20N + "
+                "0.20D + 0.20T + 0.10C"
+            ),
+
+        "risk_policy":
+            {
+                "active":
+                    f"0~{RISK_LOW_MAX}",
+
+                "re_auth":
+                    (
+                        f"{RISK_LOW_MAX + 1}"
+                        f"~{RISK_MEDIUM_MAX}"
+                    ),
+
+                "blocked":
+                    (
+                        f"{RISK_MEDIUM_MAX + 1}"
+                        "~100"
+                    ),
+            },
+
+        "local_log_retention_days":
+            RISK_LOG_RETENTION_DAYS,
+
         "ml_feature_log":
             "MySQL ml_feature_logs",
 
@@ -1147,20 +1333,14 @@ def read_root():
 
 
 # ============================================================
-# 논문 기반 Rule-Based Trust Score
-#
-# TS = WB * B + WN * N + WD * D + WT * T
-#
-# WB = 0.4
-# WN = 0.3
-# WD = 0.2
-# WT = 0.1
+# B/N/D/T/C Rule-Based Trust Score
 # ============================================================
 
-WB = 0.4
-WN = 0.3
-WD = 0.2
-WT = 0.1
+WB = 0.30
+WN = 0.20
+WD = 0.20
+WT = 0.20
+WC = 0.10
 
 
 def clamp_score(
@@ -1175,10 +1355,6 @@ def clamp_score(
         ),
     )
 
-
-# ============================================================
-# 기존 Rule 임계값을 0~100 위험도로 정규화
-# ============================================================
 
 def normalize_login_frequency(
     login_frequency: int,
@@ -1247,6 +1423,34 @@ def normalize_login_hour(
     return 0.0
 
 
+def normalize_day_of_week(
+    day_of_week: int,
+) -> float:
+
+    if day_of_week in (
+        5,
+        6,
+    ):
+        return 50.0
+
+    return 0.0
+
+
+def normalize_login_region(
+    login_region: str,
+) -> float:
+
+    if (
+        login_region
+        and
+        login_region.upper()
+        == "KR"
+    ):
+        return 0.0
+
+    return 100.0
+
+
 def boolean_risk(
     value: bool,
 ) -> float:
@@ -1255,6 +1459,16 @@ def boolean_risk(
         return 100.0
 
     return 0.0
+
+
+def inverse_boolean_risk(
+    value: bool,
+) -> float:
+
+    if value:
+        return 0.0
+
+    return 100.0
 
 
 def average_score(
@@ -1271,7 +1485,7 @@ def average_score(
 
 
 # ============================================================
-# 논문 기반 B / N / D / T 영역 점수
+# B / N / D / T / C 영역 점수 계산
 # ============================================================
 
 def calculate_trust_score(
@@ -1281,15 +1495,6 @@ def calculate_trust_score(
     Dict[str, int],
     List[str],
 ]:
-
-    # ========================================================
-    # B - Behavior
-    #
-    # 로그인 빈도
-    # 로그인 실패 횟수
-    # Challenge 응답시간
-    # 로그인 시간대
-    # ========================================================
 
     behavior_score = average_score(
         [
@@ -1305,19 +1510,16 @@ def calculate_trust_score(
                 data.challengeResponseTime
             ),
 
-            normalize_login_hour(
-                data.loginHour
+            boolean_risk(
+                data.authenticationMethodChanged
+            ),
+
+            inverse_boolean_risk(
+                data.hasPreviousContext
             ),
         ]
     )
 
-
-    # ========================================================
-    # N - Network
-    #
-    # IP 변경
-    # 지역 변경
-    # ========================================================
 
     network_score = average_score(
         [
@@ -1331,15 +1533,6 @@ def calculate_trust_score(
         ]
     )
 
-
-    # ========================================================
-    # D - Device / Credential
-    #
-    # signCount 이상
-    # Credential 불일치
-    # User-Agent 변경
-    # 신규 기기
-    # ========================================================
 
     device_score = average_score(
         [
@@ -1362,13 +1555,6 @@ def calculate_trust_score(
     )
 
 
-    # ========================================================
-    # T - Threat History
-    #
-    # 연속 로그인 실패
-    # Blacklist IP
-    # ========================================================
-
     threat_score = average_score(
         [
             normalize_login_failure(
@@ -1382,11 +1568,22 @@ def calculate_trust_score(
     )
 
 
-    # ========================================================
-    # 논문 가중합 공식
-    #
-    # TS = 0.4B + 0.3N + 0.2D + 0.1T
-    # ========================================================
+    context_score = average_score(
+        [
+            normalize_login_hour(
+                data.loginHour
+            ),
+
+            normalize_day_of_week(
+                data.dayOfWeek
+            ),
+
+            normalize_login_region(
+                data.loginRegion
+            ),
+        ]
+    )
+
 
     weighted_behavior = (
         WB
@@ -1408,12 +1605,18 @@ def calculate_trust_score(
         * threat_score
     )
 
+    weighted_context = (
+        WC
+        * context_score
+    )
+
 
     rule_score = (
         weighted_behavior
         + weighted_network
         + weighted_device
         + weighted_threat
+        + weighted_context
     )
 
 
@@ -1456,6 +1659,13 @@ def calculate_trust_score(
                 )
             ),
 
+        "C_context":
+            int(
+                round(
+                    context_score
+                )
+            ),
+
         "WB_B":
             int(
                 round(
@@ -1481,6 +1691,13 @@ def calculate_trust_score(
             int(
                 round(
                     weighted_threat
+                )
+            ),
+
+        "WC_C":
+            int(
+                round(
+                    weighted_context
                 )
             ),
     }
@@ -1524,14 +1741,17 @@ def calculate_trust_score(
         )
 
 
-    if (
-        0
-        <= data.loginHour
-        <= 5
-    ):
+    if data.authenticationMethodChanged:
 
         triggers.append(
-            "ODD_HOUR"
+            "AUTHENTICATION_METHOD_CHANGED"
+        )
+
+
+    if not data.hasPreviousContext:
+
+        triggers.append(
+            "NO_PREVIOUS_CONTEXT"
         )
 
 
@@ -1591,11 +1811,47 @@ def calculate_trust_score(
         )
 
 
+    if (
+        0
+        <= data.loginHour
+        <= 5
+    ):
+
+        triggers.append(
+            "ODD_HOUR"
+        )
+
+
+    if data.dayOfWeek in (
+        5,
+        6,
+    ):
+
+        triggers.append(
+            "WEEKEND_ACCESS"
+        )
+
+
+    if (
+        data.loginRegion
+        and
+        data.loginRegion.upper()
+        != "KR"
+    ):
+
+        triggers.append(
+            "FOREIGN_LOGIN_REGION"
+        )
+
+
     print(
         "Rule-Based Trust Score:",
         {
             "formula":
-                "TS = 0.4B + 0.3N + 0.2D + 0.1T",
+                (
+                    "TS = 0.30B + 0.20N + "
+                    "0.20D + 0.20T + 0.10C"
+                ),
 
             "B":
                 round(
@@ -1618,6 +1874,12 @@ def calculate_trust_score(
             "T":
                 round(
                     threat_score,
+                    2,
+                ),
+
+            "C":
+                round(
+                    context_score,
                     2,
                 ),
 
@@ -1645,6 +1907,12 @@ def calculate_trust_score(
                     2,
                 ),
 
+            "WC_C":
+                round(
+                    weighted_context,
+                    2,
+                ),
+
             "rule_score":
                 rule_score,
         }
@@ -1660,13 +1928,25 @@ def calculate_trust_score(
 
 # ============================================================
 # 최종 인증 정책
+#
+# 기본값:
+# 0 ~ 30
+#   ACTIVE
+#
+# 31 ~ 69
+#   RE_AUTH
+#
+# 70 ~ 100
+#   BLOCKED
+#
+# 실제 경계값은 환경변수에서 읽는다.
 # ============================================================
 
 def determine_authentication_policy(
     score: int,
 ) -> tuple[str, str, str]:
 
-    if score <= 30:
+    if score <= RISK_LOW_MAX:
 
         return (
             "low",
@@ -1674,7 +1954,7 @@ def determine_authentication_policy(
             "로그인이 허용되었습니다.",
         )
 
-    if score <= 69:
+    if score <= RISK_MEDIUM_MAX:
 
         return (
             "medium",
@@ -1701,10 +1981,6 @@ def calculate_risk(
     data: LogData,
 ) -> RiskResponse:
 
-    # ========================================================
-    # 로그인 이벤트 ID
-    # ========================================================
-
     event_id = (
         generate_event_id()
     )
@@ -1714,12 +1990,6 @@ def calculate_risk(
         event_id,
     )
 
-
-    # ========================================================
-    # 논문 기반 Rule-Based Trust Score
-    #
-    # TS = 0.4B + 0.3N + 0.2D + 0.1T
-    # ========================================================
 
     (
         score,
@@ -1736,26 +2006,12 @@ def calculate_risk(
     )
 
 
-    # ========================================================
-    # Isolation Forest
-    # ========================================================
-
     ml_result = (
         run_ml_analysis(
             data
         )
     )
 
-
-    # ========================================================
-    # Hybrid Risk
-    #
-    # NORMAL
-    #   -> 기존 Rule Score 유지
-    #
-    # ANOMALY
-    #   -> Rule Score + 20
-    # ========================================================
 
     if (
         ml_result[
@@ -1787,10 +2043,6 @@ def calculate_risk(
         ] = ml_risk_score
 
 
-    # ========================================================
-    # 최종 인증 정책
-    # ========================================================
-
     (
         risk_level,
         authentication_action,
@@ -1808,10 +2060,6 @@ def calculate_risk(
             "NO_RISK_DETECTED"
         )
 
-
-    # ========================================================
-    # Response
-    # ========================================================
 
     risk_response = RiskResponse(
         userIdHash=
@@ -1863,29 +2111,17 @@ def calculate_risk(
     )
 
 
-    # ========================================================
-    # REAL Feature 저장
-    # ========================================================
-
     save_ml_feature_log(
         data,
         event_id,
     )
 
 
-    # ========================================================
-    # ML Prediction 저장
-    # ========================================================
-
     save_ml_prediction(
         event_id,
         ml_result,
     )
 
-
-    # ========================================================
-    # Risk 로그 저장
-    # ========================================================
 
     save_risk_log(
         event_id,
@@ -1901,7 +2137,10 @@ def calculate_risk(
                 event_id,
 
             "formula":
-                "TS = 0.4B + 0.3N + 0.2D + 0.1T",
+                (
+                    "TS = 0.30B + 0.20N + "
+                    "0.20D + 0.20T + 0.10C"
+                ),
 
             "risk_score":
                 score,

@@ -79,6 +79,25 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
 
+      # ======================================================
+      # F-07 Risk 인증 정책
+      #
+      # 0 ~ 30   = ACTIVE
+      # 31 ~ 69  = RE_AUTH
+      # 70 ~ 100 = BLOCKED
+      # ======================================================
+      - RISK_LOW_MAX=30
+      - RISK_MEDIUM_MAX=69
+
+      # ======================================================
+      # F-08 / F-09 Risk 로컬 로그 보관 정책
+      #
+      # 날짜 단위 로테이션
+      # 180일(6개월) 보관 후 삭제
+      # ======================================================
+      - RISK_LOG_RETENTION_DAYS=180
+      - RISK_LOG_DIR=/app/risk_logs
+
       - TZ=Asia/Seoul
 
     depends_on:
@@ -147,6 +166,7 @@ services:
     env_file:
       - .env.dev
 
+    # F-09 MySQL 자동 파기 Event Scheduler 사용
     command: --event-scheduler=ON
 
     ports:
@@ -236,7 +256,6 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
       - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
 
     expose:
