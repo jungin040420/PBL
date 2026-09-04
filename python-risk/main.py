@@ -22,12 +22,12 @@ from app.isolation_model import (
 app = FastAPI(
     title="Hybrid Risk Score API",
     description=(
-        "논문 기반 Rule-Based Trust Score와 "
+        "B/N/D/T/C 기반 Rule-Based Trust Score와 "
         "Isolation Forest 이상 탐지를 이용해 "
         "로그인 위험도를 분석하고 "
         "ML Feature 및 Prediction을 저장합니다."
     ),
-    version="2.1.0",
+    version="2.2.0",
 )
 
 
@@ -167,6 +167,8 @@ class LogData(BaseModel):
 
     authenticationMethodChanged: bool = False
 
+    hasPreviousContext: bool = False
+
     # ========================================================
     # N - Network
     # ========================================================
@@ -199,7 +201,7 @@ class LogData(BaseModel):
     blacklistIpDetected: bool = False
 
     # ========================================================
-    # Time
+    # C - Context
     # ========================================================
 
     loginHour: int = Field(
@@ -214,17 +216,11 @@ class LogData(BaseModel):
         le=6,
     )
 
-    # ========================================================
-    # Context
-    # ========================================================
-
     loginRegion: str = Field(
         default="KR",
         min_length=2,
         max_length=32,
     )
-
-    hasPreviousContext: bool = False
 
 
 # ============================================================
@@ -334,9 +330,6 @@ def create_ml_db_connection():
 
 # ============================================================
 # MySQL REAL Feature 저장
-#
-# event_id는 외부에서 전달받는다.
-# 새 event_id를 여기서 생성하지 않는다.
 # ============================================================
 
 def save_ml_feature_log(
@@ -733,11 +726,20 @@ def run_ml_analysis(
 
     # ========================================================
     # 최종 확정 16개 ML Feature
+    #
+    # B = 5
+    # N = 2
+    # D = 4
+    # T = 2
+    # C = 3
+    #
+    # 총 16개
     # ========================================================
 
     features = {
 
-        # B
+        # B - Behavior
+
         "loginFrequency":
             data.loginFrequency,
 
@@ -756,14 +758,19 @@ def run_ml_analysis(
         "authenticationMethodChanged":
             data.authenticationMethodChanged,
 
-        # N
+        "hasPreviousContext":
+            data.hasPreviousContext,
+
+        # N - Network
+
         "ipChanged":
             data.ipChanged,
 
         "regionChanged":
             data.regionChanged,
 
-        # D
+        # D - Device
+
         "signCountAbnormal":
             data.signCountAbnormal,
 
@@ -776,28 +783,26 @@ def run_ml_analysis(
         "isNewDevice":
             data.isNewDevice,
 
-        # T
+        # T - Threat
+
         "consecutiveFailureCount":
             data.consecutiveFailureCount,
 
         "blacklistIpDetected":
             data.blacklistIpDetected,
 
-        # Time
+        # C - Context
+
         "loginHour":
             data.loginHour,
 
         "dayOfWeek":
             data.dayOfWeek,
 
-        # Context
         "loginRegion":
             encode_login_region(
                 data.loginRegion
             ),
-
-        "hasPreviousContext":
-            data.hasPreviousContext,
     }
 
     print(
@@ -942,7 +947,8 @@ def save_risk_log(
         "country":
             data.country,
 
-        # B
+        # B - Behavior
+
         "loginFrequency":
             data.loginFrequency,
 
@@ -955,14 +961,19 @@ def save_risk_log(
         "authenticationMethodChanged":
             data.authenticationMethodChanged,
 
-        # N
+        "hasPreviousContext":
+            data.hasPreviousContext,
+
+        # N - Network
+
         "ipChanged":
             data.ipChanged,
 
         "regionChanged":
             data.regionChanged,
 
-        # D
+        # D - Device
+
         "signCountAbnormal":
             data.signCountAbnormal,
 
@@ -975,28 +986,27 @@ def save_risk_log(
         "isNewDevice":
             data.isNewDevice,
 
-        # T
+        # T - Threat
+
         "consecutiveFailureCount":
             data.consecutiveFailureCount,
 
         "blacklistIpDetected":
             data.blacklistIpDetected,
 
-        # Time
+        # C - Context
+
         "loginHour":
             data.loginHour,
 
         "dayOfWeek":
             data.dayOfWeek,
 
-        # Context
         "loginRegion":
             data.loginRegion,
 
-        "hasPreviousContext":
-            data.hasPreviousContext,
-
         # 결과
+
         "risk_score":
             risk_response.risk_score,
 
@@ -1100,6 +1110,12 @@ def read_root():
         "docs":
             "/docs",
 
+        "rule_formula":
+            (
+                "TS = 0.30B + 0.20N + "
+                "0.20D + 0.20T + 0.10C"
+            ),
+
         "ml_feature_log":
             "MySQL ml_feature_logs",
 
@@ -1147,20 +1163,26 @@ def read_root():
 
 
 # ============================================================
-# 논문 기반 Rule-Based Trust Score
+# B/N/D/T/C 기반 Rule-Based Trust Score
 #
-# TS = WB * B + WN * N + WD * D + WT * T
+# TS = WB * B + WN * N + WD * D + WT * T + WC * C
 #
-# WB = 0.4
-# WN = 0.3
-# WD = 0.2
-# WT = 0.1
+# 가중치 우선순위:
+#
+# Behavior = 0.30
+# Network  = 0.20
+# Device   = 0.20
+# Threat   = 0.20
+# Context  = 0.10
+#
+# 합계 = 1.00
 # ============================================================
 
-WB = 0.4
-WN = 0.3
-WD = 0.2
-WT = 0.1
+WB = 0.30
+WN = 0.20
+WD = 0.20
+WT = 0.20
+WC = 0.10
 
 
 def clamp_score(
@@ -1177,7 +1199,10 @@ def clamp_score(
 
 
 # ============================================================
-# 기존 Rule 임계값을 0~100 위험도로 정규화
+# Feature별 위험도 정규화
+#
+# 아래 값은 기존 프로젝트에서 사용하던 임계값을
+# 0~100 영역 점수 계산용으로 변환한 것이다.
 # ============================================================
 
 def normalize_login_frequency(
@@ -1220,6 +1245,7 @@ def normalize_response_time(
     if challenge_response_time is None:
         return 0.0
 
+    # 지나치게 빠른 응답
     if (
         0
         < challenge_response_time
@@ -1227,6 +1253,7 @@ def normalize_response_time(
     ):
         return 100.0
 
+    # 지나치게 느린 응답
     if challenge_response_time > 5000:
         return 50.0
 
@@ -1237,6 +1264,7 @@ def normalize_login_hour(
     login_hour: int,
 ) -> float:
 
+    # 심야 시간대
     if (
         0
         <= login_hour
@@ -1247,6 +1275,38 @@ def normalize_login_hour(
     return 0.0
 
 
+def normalize_day_of_week(
+    day_of_week: int,
+) -> float:
+
+    # Python/프로젝트 값 기준:
+    # 0~4 평일
+    # 5~6 주말
+    if day_of_week in (
+        5,
+        6,
+    ):
+        return 50.0
+
+    return 0.0
+
+
+def normalize_login_region(
+    login_region: str,
+) -> float:
+
+    # 현재 서비스의 정상 기준 지역은 KR
+    if (
+        login_region
+        and
+        login_region.upper()
+        == "KR"
+    ):
+        return 0.0
+
+    return 100.0
+
+
 def boolean_risk(
     value: bool,
 ) -> float:
@@ -1255,6 +1315,18 @@ def boolean_risk(
         return 100.0
 
     return 0.0
+
+
+def inverse_boolean_risk(
+    value: bool,
+) -> float:
+
+    # hasPreviousContext와 같이
+    # False일 때 위험도가 증가하는 Feature용
+    if value:
+        return 0.0
+
+    return 100.0
 
 
 def average_score(
@@ -1271,7 +1343,37 @@ def average_score(
 
 
 # ============================================================
-# 논문 기반 B / N / D / T 영역 점수
+# B / N / D / T / C 영역 점수 계산
+#
+# 최종 매핑
+#
+# B - Behavior (5)
+#   loginFrequency
+#   failedLoginCount
+#   challengeResponseTime
+#   authenticationMethodChanged
+#   hasPreviousContext
+#
+# N - Network (2)
+#   ipChanged
+#   regionChanged
+#
+# D - Device (4)
+#   signCountAbnormal
+#   credentialMismatch
+#   userAgentChanged
+#   isNewDevice
+#
+# T - Threat (2)
+#   consecutiveFailureCount
+#   blacklistIpDetected
+#
+# C - Context (3)
+#   loginHour
+#   dayOfWeek
+#   loginRegion
+#
+# 총 16개
 # ============================================================
 
 def calculate_trust_score(
@@ -1284,11 +1386,6 @@ def calculate_trust_score(
 
     # ========================================================
     # B - Behavior
-    #
-    # 로그인 빈도
-    # 로그인 실패 횟수
-    # Challenge 응답시간
-    # 로그인 시간대
     # ========================================================
 
     behavior_score = average_score(
@@ -1305,8 +1402,12 @@ def calculate_trust_score(
                 data.challengeResponseTime
             ),
 
-            normalize_login_hour(
-                data.loginHour
+            boolean_risk(
+                data.authenticationMethodChanged
+            ),
+
+            inverse_boolean_risk(
+                data.hasPreviousContext
             ),
         ]
     )
@@ -1314,9 +1415,6 @@ def calculate_trust_score(
 
     # ========================================================
     # N - Network
-    #
-    # IP 변경
-    # 지역 변경
     # ========================================================
 
     network_score = average_score(
@@ -1334,11 +1432,6 @@ def calculate_trust_score(
 
     # ========================================================
     # D - Device / Credential
-    #
-    # signCount 이상
-    # Credential 불일치
-    # User-Agent 변경
-    # 신규 기기
     # ========================================================
 
     device_score = average_score(
@@ -1363,10 +1456,7 @@ def calculate_trust_score(
 
 
     # ========================================================
-    # T - Threat History
-    #
-    # 연속 로그인 실패
-    # Blacklist IP
+    # T - Threat / History
     # ========================================================
 
     threat_score = average_score(
@@ -1383,9 +1473,35 @@ def calculate_trust_score(
 
 
     # ========================================================
-    # 논문 가중합 공식
+    # C - Context
+    # ========================================================
+
+    context_score = average_score(
+        [
+            normalize_login_hour(
+                data.loginHour
+            ),
+
+            normalize_day_of_week(
+                data.dayOfWeek
+            ),
+
+            normalize_login_region(
+                data.loginRegion
+            ),
+        ]
+    )
+
+
+    # ========================================================
+    # B/N/D/T/C 가중합 공식
     #
-    # TS = 0.4B + 0.3N + 0.2D + 0.1T
+    # TS =
+    # 0.30B
+    # + 0.20N
+    # + 0.20D
+    # + 0.20T
+    # + 0.10C
     # ========================================================
 
     weighted_behavior = (
@@ -1408,12 +1524,18 @@ def calculate_trust_score(
         * threat_score
     )
 
+    weighted_context = (
+        WC
+        * context_score
+    )
+
 
     rule_score = (
         weighted_behavior
         + weighted_network
         + weighted_device
         + weighted_threat
+        + weighted_context
     )
 
 
@@ -1425,6 +1547,10 @@ def calculate_trust_score(
         )
     )
 
+
+    # ========================================================
+    # 영역별 점수 및 가중 점수
+    # ========================================================
 
     feature_scores: Dict[str, int] = {
 
@@ -1456,6 +1582,13 @@ def calculate_trust_score(
                 )
             ),
 
+        "C_context":
+            int(
+                round(
+                    context_score
+                )
+            ),
+
         "WB_B":
             int(
                 round(
@@ -1483,11 +1616,24 @@ def calculate_trust_score(
                     weighted_threat
                 )
             ),
+
+        "WC_C":
+            int(
+                round(
+                    weighted_context
+                )
+            ),
     }
 
 
+    # ========================================================
+    # Trigger 생성
+    # ========================================================
+
     triggers: List[str] = []
 
+
+    # B - Behavior
 
     if data.loginFrequency >= 3:
 
@@ -1524,16 +1670,21 @@ def calculate_trust_score(
         )
 
 
-    if (
-        0
-        <= data.loginHour
-        <= 5
-    ):
+    if data.authenticationMethodChanged:
 
         triggers.append(
-            "ODD_HOUR"
+            "AUTHENTICATION_METHOD_CHANGED"
         )
 
+
+    if not data.hasPreviousContext:
+
+        triggers.append(
+            "NO_PREVIOUS_CONTEXT"
+        )
+
+
+    # N - Network
 
     if data.ipChanged:
 
@@ -1548,6 +1699,8 @@ def calculate_trust_score(
             "REGION_CHANGED"
         )
 
+
+    # D - Device
 
     if data.signCountAbnormal:
 
@@ -1577,6 +1730,8 @@ def calculate_trust_score(
         )
 
 
+    # T - Threat
+
     if data.consecutiveFailureCount >= 1:
 
         triggers.append(
@@ -1591,11 +1746,53 @@ def calculate_trust_score(
         )
 
 
+    # C - Context
+
+    if (
+        0
+        <= data.loginHour
+        <= 5
+    ):
+
+        triggers.append(
+            "ODD_HOUR"
+        )
+
+
+    if data.dayOfWeek in (
+        5,
+        6,
+    ):
+
+        triggers.append(
+            "WEEKEND_ACCESS"
+        )
+
+
+    if (
+        data.loginRegion
+        and
+        data.loginRegion.upper()
+        != "KR"
+    ):
+
+        triggers.append(
+            "FOREIGN_LOGIN_REGION"
+        )
+
+
+    # ========================================================
+    # 관리자 시연용 상세 로그
+    # ========================================================
+
     print(
         "Rule-Based Trust Score:",
         {
             "formula":
-                "TS = 0.4B + 0.3N + 0.2D + 0.1T",
+                (
+                    "TS = 0.30B + 0.20N + "
+                    "0.20D + 0.20T + 0.10C"
+                ),
 
             "B":
                 round(
@@ -1618,6 +1815,12 @@ def calculate_trust_score(
             "T":
                 round(
                     threat_score,
+                    2,
+                ),
+
+            "C":
+                round(
+                    context_score,
                     2,
                 ),
 
@@ -1645,6 +1848,12 @@ def calculate_trust_score(
                     2,
                 ),
 
+            "WC_C":
+                round(
+                    weighted_context,
+                    2,
+                ),
+
             "rule_score":
                 rule_score,
         }
@@ -1660,6 +1869,15 @@ def calculate_trust_score(
 
 # ============================================================
 # 최종 인증 정책
+#
+# 0 ~ 30
+#   ACTIVE
+#
+# 31 ~ 69
+#   RE_AUTH
+#
+# 70 ~ 100
+#   BLOCKED
 # ============================================================
 
 def determine_authentication_policy(
@@ -1716,9 +1934,14 @@ def calculate_risk(
 
 
     # ========================================================
-    # 논문 기반 Rule-Based Trust Score
+    # B/N/D/T/C 기반 Rule-Based Trust Score
     #
-    # TS = 0.4B + 0.3N + 0.2D + 0.1T
+    # TS =
+    # 0.30B
+    # + 0.20N
+    # + 0.20D
+    # + 0.20T
+    # + 0.10C
     # ========================================================
 
     (
@@ -1751,7 +1974,7 @@ def calculate_risk(
     # Hybrid Risk
     #
     # NORMAL
-    #   -> 기존 Rule Score 유지
+    #   -> Rule Score 유지
     #
     # ANOMALY
     #   -> Rule Score + 20
@@ -1894,6 +2117,10 @@ def calculate_risk(
     )
 
 
+    # ========================================================
+    # 최종 관리자 로그
+    # ========================================================
+
     print(
         "Risk 분석 완료:",
         {
@@ -1901,7 +2128,10 @@ def calculate_risk(
                 event_id,
 
             "formula":
-                "TS = 0.4B + 0.3N + 0.2D + 0.1T",
+                (
+                    "TS = 0.30B + 0.20N + "
+                    "0.20D + 0.20T + 0.10C"
+                ),
 
             "risk_score":
                 score,
