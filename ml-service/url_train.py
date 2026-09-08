@@ -237,25 +237,14 @@ def train_and_evaluate(X, y, groups, binary_cols, numeric_cols):
 
     # 모델
     models = {
-        "Logistic Regression": LogisticRegression(
-            max_iter=1000,
-            random_state=RANDOM_STATE,
-            class_weight="balanced"
-        ),
 
         "Random Forest": RandomForestClassifier(
             n_estimators=200,
             random_state=RANDOM_STATE,
             class_weight="balanced",
             n_jobs=-1
-        ),
-
-        "Gradient Boosting": GradientBoostingClassifier(
-            n_estimators=200,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=RANDOM_STATE
         )
+
     }
 
     results = {}

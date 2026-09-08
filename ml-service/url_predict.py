@@ -133,8 +133,29 @@ async def predict_url(url, artifacts):
 
     model = artifacts["model"]
 
+    print("\n=== MODEL FEATURE IMPORTANCE ===")
+
+    for name, importance in sorted(
+        zip(X.columns, model.feature_importances_),
+        key=lambda x: x[1],
+        reverse=True
+    ):
+        print(f"{name:35s} = {importance:.4f}")
+
     # 악성 확률
     prob = float(model.predict_proba(X)[0, 1])
+
+    print("model.classes_ =", model.classes_)
+    print("probabilities =", model.predict_proba(X)[0])
+
+    print("phish features:")
+    for key, value in raw_feature.items():
+        if "phish" in key:
+            print(key, "=", value)
+
+    print("\n=== ALL FEATURES ===")
+    for key, value in raw_feature.items():
+        print(f"{key} = {value}")
 
     ####################################################
     # 3단계 판정
