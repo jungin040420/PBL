@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-const { hashForCompare } = require('../utils/anonymize');
+const { hashForCompare } = require('./utils/anonymize');
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
