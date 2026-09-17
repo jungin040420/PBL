@@ -118,7 +118,23 @@ def extract_static_url_features(url: str) -> dict:
     hostname = _get_hostname(url)
 
     # abnormal_url: hostname이 url 문자열에 실제로 포함돼 있는지 확인
-    feat["abnormal_url"] = 1 if hostname and hostname in url.lower() else 0
+    try:
+        parsed = urlparse(url)
+
+        abnormal = 0
+
+        # hostname이 없으면 비정상
+        if not parsed.hostname:
+            abnormal = 1
+
+        # @가 있으면 사용자정보(userinfo)를 이용한 위장 가능성
+        elif parsed.username or parsed.password:
+            abnormal = 1
+
+        feat["abnormal_url"] = abnormal
+
+    except Exception:
+        feat["abnormal_url"] = 1
 
     feat["https"] = 1 if urlparse(url).scheme == "https" else 0
     feat["Shortining_Service"] = 1 if SHORTENER_PATTERN.search(url) else 0

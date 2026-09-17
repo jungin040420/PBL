@@ -1,1 +1,0 @@
-print("ml-service 실행중")
