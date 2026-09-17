@@ -13,9 +13,13 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
+const { hashForCompare } = require('../utils/anonymize');
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => req.ip,
   message: {
     error: '너무 많은 요청입니다. 잠시 후 시도해주세요.'
   }
