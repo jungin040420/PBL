@@ -1,4 +1,5 @@
 const requestIp = require('request-ip');
+const geoip = require('geoip-lite');
 
 const collectContext = (req, res, next) => {
   const now = new Date();
@@ -12,7 +13,8 @@ const collectContext = (req, res, next) => {
   const isNightAccess = hour < 6 || hour >= 22;
   const loginHour = hour;
   const dayOfWeek = now.getDay();
-  const country = 'KR';
+  const geo = geoip.lookup(ip);
+  const country = geo?.country || 'KR';
 
   req.context = {
     ip,
@@ -22,7 +24,7 @@ const collectContext = (req, res, next) => {
     isNightAccess,
     loginHour,
     dayOfWeek,
-    country
+    country,
   };
 
 
@@ -34,7 +36,8 @@ const collectContext = (req, res, next) => {
     isNightAccess,
     loginHour,
     dayOfWeek,
-    country
+    country,
+    geoLookupSucceeded: Boolean(geo)
   });
 
   next();
