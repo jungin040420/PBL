@@ -1,370 +1,544 @@
 """
-feature_extractor.py
-─────────────────────────────────────────────────────────
-train.py 에서 학습에 사용한 59개 피처(SELECTED_FEATURES)를
-"실시간으로" 그대로 재현하기 위한 모듈.
+url_feature_extractor.py
 
-  ① URL 정적 피처        : urllib.parse / 정규식 만으로 계산 (스캔 불필요)
-  ② phish_* 휴리스틱 피처 : URL 문자열 분석만으로 계산 (스캔 불필요)
-  ③ web_*  DOM/스캔 피처  : Playwright로 실제 페이지에 접속해서 계산
+URL + 실제 웹페이지 DOM/HTML 기반 피싱 탐지
 
-주의:
-  원본 CSV(final_dataset_with_all_features_v3_1.csv)를 만든 원본 피처
-  엔지니어링 코드가 없으므로, phish_*/web_* 항목은 컬럼명과 데이터 분포
-  (예: web_security_score 0~4 = csp+xframe+hsts+xcontent 합)를 근거로
-  "동일한 의미가 되도록" 최대한 합리적으로 재구성한 것입니다.
-  실제 운영 전에는 브랜드 리스트/의심 TLD/키워드 목록을 프로젝트 요구사항에
-  맞게 조정하세요.
+동작 방식
+1. 현재 URL을 실제 브라우저로 접속
+2. 최종 URL의 도메인이 공식 도메인이면 AI 모델 없이 TRUSTED_SITE
+3. 공식 도메인이 아니면 AI 모델 실행
+   - prediction == 1 -> LEGIT
+   - prediction == 0 -> PHISHING
+
+실행:
+    python url_feature_extractor.py https://myfido2mfa.com
+
+필수 설치:
+    pip install playwright beautifulsoup4 joblib pandas numpy scikit-learn
+    python -m playwright install chromium   # 최초 1회
 """
 
-import re
-import asyncio
+import argparse
 import ipaddress
-from urllib.parse import urlparse, parse_qs
+import json
+import math
+import re
+from collections import Counter
+from pathlib import Path
+from urllib.parse import urlparse
 
-from playwright.async_api import async_playwright
+import joblib
+import numpy as np
+import pandas as pd
+from bs4 import BeautifulSoup
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
+# ============================================================
+# 설정
+# ============================================================
 
-# ─────────────────────────────────────────────
-# 참조 리스트 (필요에 따라 자유롭게 확장/수정)
-# ─────────────────────────────────────────────
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "model_artifacts"
 
-SHORTENER_PATTERN = re.compile(
-    r"bit\.ly|goo\.gl|shorte\.st|go2l\.ink|x\.co|ow\.ly|t\.co|tinyurl|tr\.im|"
-    r"is\.gd|cli\.gs|yfrog\.com|migre\.me|ff\.im|tiny\.cc|url4\.eu|twit\.ac|"
-    r"su\.pr|twurl\.nl|snipurl\.com|short\.to|budurl\.com|ping\.fm|post\.ly|"
-    r"just\.as|bkite\.com|snipr\.com|fic\.kr|loopt\.us|doiop\.com|short\.ie|"
-    r"kl\.am|wp\.me|rubyurl\.com|om\.ly|to\.ly|bit\.do|lnkd\.in|db\.tt|"
-    r"qr\.ae|adf\.ly|bitly\.com|cur\.lv|tinyurl\.com|ity\.im|q\.gs|po\.st|"
-    r"bc\.vc|rb\.gy|shrtco\.de",
-    re.IGNORECASE,
-)
+TRUSTED_DOMAINS = {"myfido2mfa.com"}
 
-SUSPICIOUS_TLDS = {
-    "tk", "ml", "ga", "cf", "gq", "xyz", "top", "work", "click", "link",
-    "loan", "download", "review", "country", "science", "gdn", "men",
+# True면 login.myfido2mfa.com 같은 서브도메인도 신뢰
+ALLOW_TRUSTED_SUBDOMAINS = True
+
+SUSPICIOUS_KEYWORDS = {
+    "login", "signin", "sign-in", "verify", "verification", "secure",
+    "account", "update", "confirm", "password", "credential", "wallet",
+    "bank", "payment", "recover", "unlock", "authenticate",
+    "authentication", "mfa", "2fa",
 }
 
-BRAND_LIST = [
-    "paypal", "apple", "google", "microsoft", "amazon", "facebook", "netflix",
-    "bank", "chase", "wellsfargo", "instagram", "whatsapp", "outlook", "office365",
-    "naver", "kakao", "samsung", "coupang", "toss", "kb국민", "shinhan",
-    "netflix", "steam", "binance", "coinbase", "dropbox", "adobe", "linkedin",
-]
-
-URGENCY_WORDS = [
-    "urgent", "verify", "suspend", "suspended", "immediately", "expire",
-    "expires", "limited", "action required", "warning", "restricted",
-    "confirm now", "24 hours", "locked",
-]
-
-SECURITY_WORDS = [
-    "password", "login", "signin", "account", "security", "ssn", "credential",
-]
-
-PATH_KEYWORDS = [
-    "login", "signin", "verify", "secure", "account", "update", "confirm",
-    "webscr", "banking",
-]
-
-HACKED_TERMS = [
-    "hacked", "deface", "defaced", "shell", "c99", "r57", "backdoor", "owned",
-    "pwned", "cracked",
-]
-
-SUSPICIOUS_EXTENSIONS = (
-    ".exe", ".scr", ".bat", ".apk", ".zip", ".rar", ".js", ".vbs", ".msi",
-    ".jar", ".php.exe",
-)
+SOCIAL_DOMAINS = {
+    "facebook.com", "instagram.com", "twitter.com", "x.com",
+    "linkedin.com", "youtube.com", "tiktok.com",
+}
 
 
-def _get_hostname(url: str) -> str:
-    hostname = urlparse(url).hostname
-    return (hostname or "").lower()
+# ============================================================
+# 유틸
+# ============================================================
+
+def normalize_url(url: str) -> str:
+    """scheme이 없으면 https:// 추가"""
+    url = url.strip()
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = "https://" + url
+    return url
 
 
-def _get_domain_parts(hostname: str):
-    """서브도메인 개수를 대략적으로 계산 (등록 도메인 기준 2 label 제외)."""
-    if not hostname:
-        return []
-    labels = hostname.split(".")
-    return labels
-
-
-# ─────────────────────────────────────────────
-# ① URL 정적 피처 (스캔 불필요)
-# ─────────────────────────────────────────────
-
-def extract_static_url_features(url: str) -> dict:
-    feat = {}
-
-    feat["url_len"] = len(url)
-    feat["@"] = url.count("@")
-    feat["?"] = url.count("?")
-    feat["-"] = url.count("-")
-    feat["="] = url.count("=")
-    feat["."] = url.count(".")
-    feat["#"] = url.count("#")
-    feat["%"] = url.count("%")
-    feat["+"] = url.count("+")
-    feat["$"] = url.count("$")
-    feat["!"] = url.count("!")
-    feat["*"] = url.count("*")
-    feat[","] = url.count(",")
-    feat["//"] = url.count("//")
-    feat["digits"] = sum(c.isdigit() for c in url)
-    feat["letters"] = sum(c.isalpha() for c in url)
-
-    hostname = _get_hostname(url)
-
-    # abnormal_url: hostname이 url 문자열에 실제로 포함돼 있는지 확인
+def get_domain(url: str) -> str:
+    """URL에서 hostname 추출 (소문자, 끝의 '.' 제거)"""
     try:
-        parsed = urlparse(url)
-
-        abnormal = 0
-
-        # hostname이 없으면 비정상
-        if not parsed.hostname:
-            abnormal = 1
-
-        # @가 있으면 사용자정보(userinfo)를 이용한 위장 가능성
-        elif parsed.username or parsed.password:
-            abnormal = 1
-
-        feat["abnormal_url"] = abnormal
-
+        return (urlparse(url).hostname or "").lower().strip().rstrip(".")
     except Exception:
-        feat["abnormal_url"] = 1
-
-    feat["https"] = 1 if urlparse(url).scheme == "https" else 0
-    feat["Shortining_Service"] = 1 if SHORTENER_PATTERN.search(url) else 0
-
-    # IP 주소 형태의 호스트인지 확인
-    is_ip = False
-    try:
-        ipaddress.ip_address(hostname)
-        is_ip = True
-    except ValueError:
-        is_ip = False
-    feat["having_ip_address"] = 1 if is_ip else 0
-
-    path = urlparse(url).path or ""
-    feat["path_underscore_count"] = path.count("_")
-
-    return feat
+        return ""
 
 
-# ─────────────────────────────────────────────
-# ② phish_* 휴리스틱 피처 (스캔 불필요, URL 문자열 기반)
-# ─────────────────────────────────────────────
+def is_trusted_domain(url: str) -> bool:
+    """
+    공식 도메인 여부 확인.
+    myfido2mfa.com.evil.com, evil-myfido2mfa.com 은 False.
+    """
+    domain = get_domain(url)
+    if not domain:
+        return False
+    if domain in TRUSTED_DOMAINS:
+        return True
+    if ALLOW_TRUSTED_SUBDOMAINS:
+        return any(domain.endswith("." + t) for t in TRUSTED_DOMAINS)
+    return False
 
-def extract_phish_heuristic_features(url: str) -> dict:
-    feat = {}
 
+def shannon_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    length = len(value)
+    return float(
+        -sum((c / length) * math.log2(c / length) for c in Counter(value).values())
+    )
+
+
+def safe_ratio(a, b) -> float:
+    return float(a / b) if b else 0.0
+
+
+# ============================================================
+# URL feature
+# ============================================================
+
+def extract_url_features(url: str) -> dict:
     parsed = urlparse(url)
-    hostname = _get_hostname(url)
-    path = (parsed.path or "").lower()
+    domain = (parsed.hostname or "").lower()
+    path = parsed.path or ""
     query = parsed.query or ""
-    full_url_lower = url.lower()
+    n = len(url)
 
-    labels = _get_domain_parts(hostname)
-    subdomain_count = max(len(labels) - 2, 0)
-    tld = labels[-1] if labels else ""
+    letters = sum(ch.isalpha() for ch in url)
+    digits = sum(ch.isdigit() for ch in url)
+    special_chars = sum(not ch.isalnum() and not ch.isspace() for ch in url)
 
-    query_params = parse_qs(query)
+    try:
+        ipaddress.ip_address(domain)
+        is_domain_ip = 1
+    except ValueError:
+        is_domain_ip = 0
 
-    # ── 기본 휴리스틱 ──────────────────────────
-    feat["phish_urgency_words"] = sum(
-        1 for w in URGENCY_WORDS if w in full_url_lower
+    tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
+    no_subdomain = max(0, len(domain.split(".")) - 2)
+
+    no_obfuscated_char = sum(1 for ch in url if ch in {"%", "@", "\\", "^"})
+
+    url_lower = url.lower()
+    suspicious_count = sum(1 for k in SUSPICIOUS_KEYWORDS if k in url_lower)
+
+    return {
+        # PhiUSIIL 계열 URL feature
+        "URLLength": n,
+        "DomainLength": len(domain),
+        "IsDomainIP": is_domain_ip,
+        "TLD": tld,
+        "TLDLength": len(tld),
+        "NoOfSubDomain": no_subdomain,
+        "HasObfuscation": int(no_obfuscated_char > 0),
+        "NoOfObfuscatedChar": no_obfuscated_char,
+        "ObfuscationRatio": safe_ratio(no_obfuscated_char, n),
+        "NoOfLettersInURL": letters,
+        "LetterRatioInURL": safe_ratio(letters, n),
+        "NoOfDegitsInURL": digits,
+        "DegitRatioInURL": safe_ratio(digits, n),
+        "NoOfEqualsInURL": url.count("="),
+        "NoOfQMarkInURL": url.count("?"),
+        "NoOfAmpersandInURL": url.count("&"),
+        "NoOfOtherSpecialCharsInURL": special_chars,
+        "SpacialCharRatioInURL": safe_ratio(special_chars, n),
+        "IsHTTPS": int(parsed.scheme.lower() == "https"),
+        # 추가 URL feature
+        "PathLength": len(path),
+        "QueryLength": len(query),
+        "NoOfQueryComponents": len([x for x in query.split("&") if x]),
+        "NoOfDots": url.count("."),
+        "NoOfHyphens": url.count("-"),
+        "NoOfUnderscores": url.count("_"),
+        "NoOfAtSigns": url.count("@"),
+        "NoOfColons": url.count(":"),
+        "NoOfSlashes": url.count("/"),
+        "NoOfPercentSigns": url.count("%"),
+        "NoOfHash": url.count("#"),
+        "URLShannonEntropy": shannon_entropy(url),
+        "DomainShannonEntropy": shannon_entropy(domain),
+        "HasSuspiciousKeyword": int(suspicious_count > 0),
+        "SuspiciousKeywordCount": suspicious_count,
+        "HasDoubleSlashInPath": int("//" in path),
+        "HasUserInfo": int(parsed.username is not None),
+        "HasPort": int(parsed.port is not None),
+    }
+
+
+# ============================================================
+# DOM / HTML feature
+# ============================================================
+
+def extract_page_features(url: str, timeout_ms: int = 30000):
+    """Playwright로 실제 페이지를 열어 DOM/HTML feature 추출"""
+    print("[INFO] Playwright로 페이지 접속 중...")
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+
+            try:
+                page.wait_for_load_state("networkidle", timeout=7000)
+            except PlaywrightTimeoutError:
+                print("[WARNING] networkidle 대기 시간 초과. 현재 HTML로 계속 진행합니다.")
+
+            final_url = page.url
+            title = page.title() or ""
+            html = page.content()
+        finally:
+            browser.close()
+
+    soup = BeautifulSoup(html, "html.parser")
+    final_domain = get_domain(final_url)
+
+    # --- 링크 / reference ---
+    external_ref = self_ref = empty_ref = 0
+
+    for tag in soup.find_all(["a", "link", "script", "img", "iframe", "form"]):
+        ref = tag.get("href") or tag.get("src") or tag.get("action")
+        if ref is None:
+            continue
+        ref = ref.strip()
+
+        if not ref or ref == "#" or ref.lower() in {"javascript:void(0)", "javascript:;"}:
+            empty_ref += 1
+        elif ref.startswith(("#", "/", "./", "../", "mailto:", "tel:", "javascript:")):
+            self_ref += 1
+        else:
+            ref_domain = get_domain(ref)
+            if not ref_domain or ref_domain == final_domain or ref_domain.endswith("." + final_domain):
+                self_ref += 1
+            else:
+                external_ref += 1
+
+    # --- HTML 구조 ---
+    html_lines = html.splitlines()
+    largest_line_length = max((len(line) for line in html_lines), default=0)
+
+    no_of_css = sum(
+        1
+        for link in soup.find_all("link")
+        if "stylesheet" in [str(x).lower() for x in link.get("rel", [])]
     )
-    feat["phish_security_words"] = sum(
-        1 for w in SECURITY_WORDS if w in full_url_lower
+
+    hidden_fields = soup.find_all(
+        "input", attrs={"type": lambda v: v and v.lower() == "hidden"}
     )
 
-    brand_hits = [b for b in BRAND_LIST if b in full_url_lower]
-    feat["phish_brand_mentions"] = len(brand_hits)
+    has_submit = any(
+        (tag.get("type") or "").lower() == "submit"
+        for tag in soup.find_all(["input", "button"])
+    )
 
-    # 브랜드명이 도메인에 등장하지만, 실제 등록 도메인(SLD)이 그 브랜드명과
-    # 정확히 일치하지 않으면(=서브도메인/하이픈 조합 등으로 흉내) hijack으로 간주
-    sld = labels[-2] if len(labels) >= 2 else hostname
-    hijack = 0
-    for b in brand_hits:
-        if b in hostname and b != sld:
-            hijack = 1
+    has_description = int(
+        soup.find("meta", attrs={"name": re.compile("^description$", re.IGNORECASE)})
+        is not None
+    )
+
+    has_social_net = 0
+    for a in soup.find_all("a", href=True):
+        d = get_domain(a["href"])
+        if any(d == s or d.endswith("." + s) for s in SOCIAL_DOMAINS):
+            has_social_net = 1
             break
-    feat["phish_brand_hijack"] = hijack
 
-    feat["phish_multiple_subdomains"] = 1 if subdomain_count > 2 else 0
-    feat["phish_long_path"] = 1 if len(path) > 75 else 0
-    feat["phish_many_params"] = 1 if len(query_params) > 3 else 0
-    feat["phish_suspicious_tld"] = 1 if tld in SUSPICIOUS_TLDS else 0
-
-    # ── adv_* (조금 더 세분화된 버전) ────────────
-    feat["phish_adv_exact_brand_match"] = 1 if any(
-        hostname == f"{b}.{tld}" for b in brand_hits
-    ) else 0
-    feat["phish_adv_brand_in_subdomain"] = 1 if any(
-        b in ".".join(labels[:-2]) for b in brand_hits
-    ) else 0
-    feat["phish_adv_brand_in_path"] = 1 if any(b in path for b in brand_hits) else 0
-
-    feat["phish_adv_hyphen_count"] = hostname.count("-")
-    feat["phish_adv_number_count"] = sum(c.isdigit() for c in hostname)
-    feat["phish_adv_suspicious_tld"] = feat["phish_suspicious_tld"]
-    feat["phish_adv_long_domain"] = 1 if len(hostname) > 30 else 0
-    feat["phish_adv_many_subdomains"] = 1 if subdomain_count > 3 else 0
-    feat["phish_adv_encoded_chars"] = url.count("%")
-    feat["phish_adv_path_keywords"] = sum(1 for k in PATH_KEYWORDS if k in path)
-    feat["phish_adv_has_redirect"] = 1 if (
-        "redirect" in query.lower() or full_url_lower.rfind("http") > 8
-    ) else 0
-    feat["phish_adv_many_params"] = len(query_params)
-
-    # ── 경로/기타 ──────────────────────────────
-    feat["path_has_hacked_terms"] = 1 if any(t in path for t in HACKED_TERMS) else 0
-    feat["suspicious_extension"] = 1 if path.endswith(SUSPICIOUS_EXTENSIONS) else 0
-    feat["is_gov_edu"] = 1 if tld in ("gov", "edu") else 0
-
-    return feat
-
-
-# ─────────────────────────────────────────────
-# ③ web_* DOM/실시간 스캔 피처 (Playwright 필요)
-# ─────────────────────────────────────────────
-
-async def extract_web_scan_features(url: str, page) -> dict:
-    feat = {}
-
-    response = None
-    is_live = 1
-
-    try:
-        response = await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-    except Exception:
-        is_live = 0
-
-    feat["web_is_live"] = is_live
-
-    if response is None:
-        # 접속 실패 시 안전한 기본값(모두 위험 쪽으로 기울지 않는 0)으로 채움
-        feat.update({
-            "web_http_status": 0,
-            "web_ext_ratio": 0.0,
-            "web_unique_domains": 0,
-            "web_favicon": 0,
-            "web_csp": 0,
-            "web_xframe": 0,
-            "web_hsts": 0,
-            "web_xcontent": 0,
-            "web_security_score": 0,
-            "web_forms_count": 0,
-            "web_password_fields": 0,
-            "web_hidden_inputs": 0,
-            "web_has_login": 0,
-            "web_ssl_valid": 0,
-        })
-        return feat
-
-    feat["web_http_status"] = response.status
-
-    headers = {k.lower(): v for k, v in (response.headers or {}).items()}
-
-    feat["web_csp"] = 1 if "content-security-policy" in headers else 0
-    feat["web_xframe"] = 1 if "x-frame-options" in headers else 0
-    feat["web_hsts"] = 1 if "strict-transport-security" in headers else 0
-    feat["web_xcontent"] = 1 if "x-content-type-options" in headers else 0
-
-    feat["web_security_score"] = (
-        feat["web_csp"] + feat["web_xframe"] + feat["web_hsts"] + feat["web_xcontent"]
+    visible_text = soup.get_text(" ", strip=True)
+    has_copyright = int(
+        re.search(r"(copyright|©|\(c\))", visible_text, re.IGNORECASE) is not None
     )
 
-    # SSL 유효성: https 접속이 오류 없이 응답을 받았는지로 판단
-    feat["web_ssl_valid"] = 1 if urlparse(url).scheme == "https" and response.ok else 0
+    # --- DomainTitleMatchScore (0~100 스케일) ---
+    domain_words = {w.lower() for w in re.findall(r"[a-zA-Z]{2,}", final_domain)}
+    title_words = set(re.findall(r"[a-zA-Z]{2,}", title.lower()))
+    if domain_words:
+        match_score = len(domain_words & title_words) / len(domain_words) * 100
+    else:
+        match_score = 0.0
 
-    # DOM 요소 분석
-    try:
-        favicon_count = await page.locator(
-            "link[rel='icon'], link[rel='shortcut icon']"
-        ).count()
-        feat["web_favicon"] = 1 if favicon_count > 0 else 0
+    features = {
+        "NoOfExternalRef": external_ref,
+        "LineOfCode": len(html_lines),
+        "NoOfSelfRef": self_ref,
+        "NoOfImage": len(soup.find_all("img")),
+        "NoOfJS": len(soup.find_all("script")),
+        "HasSocialNet": has_social_net,
+        "NoOfCSS": no_of_css,
+        "HasCopyrightInfo": has_copyright,
+        "HasDescription": has_description,
+        "HasSubmitButton": int(has_submit),
+        "LargestLineLength": largest_line_length,
+        "DomainTitleMatchScore": match_score,
+        "NoOfiFrame": len(soup.find_all("iframe")),
+        "NoOfEmptyRef": empty_ref,
+        "HasHiddenFields": int(len(hidden_fields) > 0),
+    }
 
-        feat["web_forms_count"] = await page.locator("form").count()
-        feat["web_password_fields"] = await page.locator("input[type='password']").count()
-        feat["web_hidden_inputs"] = await page.locator("input[type='hidden']").count()
+    return features, final_url, title
 
-        feat["web_has_login"] = 1 if (
-            feat["web_password_fields"] > 0
-        ) else 0
 
-        # 외부 리소스 비율 / 참조 도메인 수 (script/img/link 태그의 src, href 기준)
-        hostname = _get_hostname(url)
-        srcs = await page.eval_on_selector_all(
-            "script[src], img[src], link[href]",
-            "els => els.map(e => e.src || e.href).filter(Boolean)"
+# ============================================================
+# 학습 preprocessing과 동일하게 적용
+# ============================================================
+
+def preprocess_features(features: dict):
+    meta_path = MODEL_DIR / "training_meta.json"
+    preprocessing_path = MODEL_DIR / "preprocessing_meta.json"
+    scaler_path = MODEL_DIR / "scaler.joblib"
+    encoder_path = MODEL_DIR / "categorical_encoders.joblib"
+
+    if not meta_path.exists():
+        raise FileNotFoundError(f"training_meta.json이 없습니다:\n{meta_path}")
+
+    if not preprocessing_path.exists():
+        raise FileNotFoundError(
+            "\npreprocessing_meta.json이 없습니다.\n"
+            "기존 모델은 학습 preprocessing 정보를 저장하지 않았습니다.\n\n"
+            "먼저 수정된 url_train.py로 모델을 다시 학습하세요."
         )
 
-        total = len(srcs)
-        ext_domains = set()
-        ext_count = 0
+    if not scaler_path.exists():
+        raise FileNotFoundError(f"scaler.joblib이 없습니다:\n{scaler_path}")
 
-        for s in srcs:
-            try:
-                d = urlparse(s).hostname or ""
-            except Exception:
-                d = ""
-            if d and d != hostname:
-                ext_count += 1
-                ext_domains.add(d)
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    with open(preprocessing_path, "r", encoding="utf-8") as f:
+        preprocessing_meta = json.load(f)
 
-        feat["web_ext_ratio"] = round(ext_count / total, 4) if total > 0 else 0.0
-        feat["web_unique_domains"] = len(ext_domains)
+    selected_features = meta["selected_features"]
+    print("[INFO] 모델이 요구하는 feature 수:", len(selected_features))
 
-    except Exception:
-        feat.setdefault("web_favicon", 0)
-        feat.setdefault("web_forms_count", 0)
-        feat.setdefault("web_password_fields", 0)
-        feat.setdefault("web_hidden_inputs", 0)
-        feat.setdefault("web_has_login", 0)
-        feat.setdefault("web_ext_ratio", 0.0)
-        feat.setdefault("web_unique_domains", 0)
+    missing = [f for f in selected_features if f not in features]
+    if missing:
+        raise ValueError(
+            "\n실시간 extractor가 training_meta.json의 feature를 생성하지 못했습니다:\n"
+            + "\n".join(f"  - {f}" for f in missing)
+        )
 
-    return feat
+    X = pd.DataFrame([{f: features[f] for f in selected_features}])
+
+    # --- categorical encoding ---
+    if encoder_path.exists():
+        encoders = joblib.load(encoder_path)
+        for column, encoder in encoders.items():
+            if column not in X.columns:
+                continue
+            value = str(X.at[0, column])
+            if value not in {str(c) for c in encoder.classes_}:
+                raise ValueError(
+                    f"\n범주형 feature '{column}'에서 "
+                    f"학습 시 없었던 값 '{value}'가 발견되었습니다."
+                )
+            X[column] = encoder.transform([value])
+
+    # --- numeric: 결측 대체 ---
+    medians = preprocessing_meta.get("numeric_medians", {})
+    for column in meta.get("numeric_cols_used", []):
+        if column not in X.columns:
+            continue
+        X[column] = pd.to_numeric(X[column], errors="coerce")
+        X[column] = X[column].fillna(float(medians.get(column, 0.0)))
+
+    # --- log1p ---
+    for column in preprocessing_meta.get("log1p_columns", []):
+        if column in X.columns:
+            X[column] = np.log1p(np.maximum(X[column].astype(float), 0))
+
+    # --- clipping ---
+    for column, (lower, upper) in preprocessing_meta.get("clip_bounds", {}).items():
+        if column in X.columns:
+            X[column] = X[column].clip(float(lower), float(upper))
+
+    # --- 정확한 feature 순서 + StandardScaler ---
+    X = X[selected_features]
+    scaler = joblib.load(scaler_path)
+    X_scaled = pd.DataFrame(scaler.transform(X), columns=selected_features)
+
+    return X_scaled, meta
 
 
-# ─────────────────────────────────────────────
-# 통합 인터페이스
-# ─────────────────────────────────────────────
+# ============================================================
+# AI prediction
+# ============================================================
 
-async def extract_features(url: str, page) -> dict:
+def run_ai_prediction(X, meta: dict) -> dict:
     """
-    train.py의 SELECTED_FEATURES(59개)와 동일한 key를 갖는 dict를 반환한다.
-    page: playwright의 browser context에서 만든 Page 객체 (호출부에서 생성/종료 관리)
+    공식 도메인이 아닌 경우에만 실행.
+    prediction == 1 -> LEGIT, prediction == 0 -> PHISHING
     """
-    feature = {}
-    feature.update(extract_static_url_features(url))
-    feature.update(extract_phish_heuristic_features(url))
-    feature.update(await extract_web_scan_features(url, page))
-    return feature
+    model_path = MODEL_DIR / "phishing_model.joblib"
+    if not model_path.exists():
+        raise FileNotFoundError(f"모델 파일이 없습니다:\n{model_path}")
+
+    model = joblib.load(model_path)
+    prediction = int(model.predict(X)[0])
+
+    # 데이터셋 기준 0 = PHISHING 이므로 class 0의 확률을 사용
+    phishing_probability = None
+    if hasattr(model, "predict_proba"):
+        classes = list(model.classes_)
+        if 0 in classes:
+            phishing_probability = float(model.predict_proba(X)[0][classes.index(0)])
+
+    if prediction == 1:
+        verdict, is_phishing = "LEGIT", False
+        reason = "공식 도메인은 아니지만 AI 모델이 정상 사이트로 분류했습니다."
+    else:
+        verdict, is_phishing = "PHISHING", True
+        reason = "공식 도메인이 아니며 AI 모델이 피싱 사이트로 분류했습니다."
+
+    return {
+        "prediction": prediction,
+        "is_phishing": is_phishing,
+        "verdict": verdict,
+        "verdict_reason": reason,
+        "phishing_probability": phishing_probability,
+        "model": model.__class__.__name__,
+        "test_f1": meta.get("test_f1"),
+        "selected_features": meta.get("selected_features"),
+    }
 
 
-async def extract_features_standalone(url: str) -> dict:
-    """단독 테스트/디버깅용: 자체적으로 브라우저를 띄우고 닫는다."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(ignore_https_errors=True)
-        page = await context.new_page()
-        try:
-            feature = await extract_features(url, page)
-        finally:
-            await context.close()
-            await browser.close()
-        return feature
+# ============================================================
+# 전체 파이프라인
+# ============================================================
+
+def predict_url(url: str) -> dict:
+    url = normalize_url(url)
+
+    print("\n" + "=" * 60)
+    print("[INFO] 분석 URL:", url)
+
+    print("\n[1/3] URL feature 추출...")
+    features = extract_url_features(url)
+
+    print("[2/3] 실제 웹페이지 분석...")
+    page_features, final_url, title = extract_page_features(url)
+    features.update(page_features)
+
+    print("[INFO] 최종 URL:", final_url)
+    print("[INFO] 페이지 제목:", title)
+
+    # 공식 도메인이면 AI 모델을 실행하지 않는다
+    if is_trusted_domain(final_url):
+        print("[INFO] 등록된 공식 도메인입니다. AI 모델 예측을 건너뜁니다.")
+        return {
+            "url": url,
+            "final_url": final_url,
+            "title": title,
+            "official_domain": True,
+            "prediction": 1,
+            "label": "TRUSTED_SITE",
+            "verdict": "TRUSTED_SITE",
+            "is_phishing": False,
+            "phishing_probability": 0.0,
+            "model": "DOMAIN_ALLOWLIST",
+            "test_f1": None,
+            "selected_features": [],
+            "verdict_reason": "등록된 공식 도메인과 일치합니다.",
+        }
+
+    print("[INFO] 공식 도메인이 아닙니다. AI 모델을 실행합니다.")
+
+    print("[3/3] 학습과 동일한 preprocessing...")
+    X, meta = preprocess_features(features)
+
+    print("[INFO] AI 모델 예측...")
+    ai = run_ai_prediction(X, meta)
+
+    return {
+        "url": url,
+        "final_url": final_url,
+        "title": title,
+        "official_domain": False,
+        "prediction": ai["prediction"],
+        "label": ai["verdict"],
+        "verdict": ai["verdict"],
+        "is_phishing": ai["is_phishing"],
+        "phishing_probability": ai["phishing_probability"],
+        "model": ai["model"],
+        "test_f1": ai["test_f1"],
+        "selected_features": ai["selected_features"],
+        "verdict_reason": ai["verdict_reason"],
+    }
+
+
+# ============================================================
+# 결과 출력
+# ============================================================
+
+def print_result(result: dict):
+    print("\n" + "=" * 60)
+    print("                     분석 결과")
+    print("=" * 60)
+    print(f"URL             : {result['url']}")
+    print(f"최종 URL        : {result['final_url']}")
+    print(f"페이지 제목     : {result['title']}")
+    print("공식 도메인     : " + ("YES" if result["official_domain"] else "NO"))
+
+    if result["verdict"] == "TRUSTED_SITE":
+        print("판정            : TRUSTED_SITE")
+        print("설명            : 등록된 공식 사이트입니다.")
+        print("AI 모델         : 실행하지 않음")
+    else:
+        print(f"모델            : {result['model']}")
+        print(f"Test F1         : {result['test_f1']}")
+        print(f"예측 label      : {result['prediction']}")
+        print(f"판정            : {result['verdict']}")
+        if result["phishing_probability"] is not None:
+            print(f"피싱 확률       : {result['phishing_probability']:.8f}")
+        print(f"설명            : {result['verdict_reason']}")
+
+    print("=" * 60)
+
+
+# ============================================================
+# main
+# ============================================================
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="URL + DOM 기반 실시간 피싱 사이트 탐지")
+    parser.add_argument(
+        "url", nargs="?", default=None,
+        help="분석할 URL. 생략하면 실행 후 입력받습니다.",
+    )
+    parser.add_argument("--json", action="store_true", help="JSON 형태로 결과 출력")
+    args = parser.parse_args()
+
+    url = args.url or input("\n분석할 URL을 입력하세요: ").strip()
+    if not url:
+        print("[ERROR] URL이 입력되지 않았습니다.")
+        return 1
+
+    try:
+        result = predict_url(url)
+        print_result(result)
+
+        if args.json:
+            print("\n[JSON RESULT]")
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+
+        return 0
+
+    except Exception as error:
+        print("\n[ERROR]", error)
+        return 1
 
 
 if __name__ == "__main__":
-    import json
-    import sys
-
-    test_url = sys.argv[1] if len(sys.argv) > 1 else "https://www.google.com"
-    result = asyncio.run(extract_features_standalone(test_url))
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    raise SystemExit(main())
