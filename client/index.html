@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI URL Checker - 피싱 사이트 검사</title>
+<title>AI URL Checker - 안전 접속 확인</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -139,6 +139,12 @@
     font-size: 13px;
     color: #cbd5e1;
     word-break: break-all;
+    margin-bottom: 8px;
+  }
+
+  .redirect-notice {
+    font-size: 12px;
+    color: #94a3b8;
   }
 
   .error-box {
@@ -157,10 +163,10 @@
 <body>
 
   <div class="card">
-    <h1>AI 피싱 URL 검사</h1>
-    <p class="subtitle">확인하고 싶은 웹사이트 주소를 입력하세요.</p>
+    <h1 id="pageTitle">AI 피싱 URL 검사</h1>
+    <p class="subtitle" id="pageSubtitle">확인하고 싶은 웹사이트 주소를 입력하세요.</p>
 
-    <div class="input-group">
+    <div class="input-group" id="inputGroup">
       <input
         type="text"
         id="urlInput"
@@ -175,6 +181,7 @@
     <div class="result-box" id="resultBox">
       <div class="verdict-title" id="verdictTitle"></div>
       <div class="verdict-detail" id="verdictDetail"></div>
+      <div class="redirect-notice" id="redirectNotice"></div>
     </div>
 
     <div class="error-box" id="errorBox">
@@ -184,43 +191,72 @@
   </div>
 
   <script>
-    // ============================================================
-    // 설정
-    // ============================================================
-
     const API_BASE_URL = "/urlcheck_api";
+    const REDIRECT_DELAY_LEGITIMATE = 1500;
 
-    // ============================================================
-    // UI 헬퍼
-    // ============================================================
+    const params = new URLSearchParams(window.location.search);
+    const redirectTarget = params.get("redirect");
+
+    window.addEventListener("DOMContentLoaded", () => {
+      if (redirectTarget) {
+        document.getElementById("pageTitle").textContent = "안전 접속 확인 중";
+        document.getElementById("pageSubtitle").textContent =
+          "요청하신 링크의 목적지를 자동으로 확인하고 있습니다.";
+        document.getElementById("inputGroup").style.display = "none";
+        document.getElementById("urlInput").value = redirectTarget;
+        runCheck();
+      }
+    });
 
     function resetUI() {
       document.getElementById("resultBox").style.display = "none";
       document.getElementById("errorBox").style.display = "none";
+      document.getElementById("redirectNotice").innerHTML = "";
     }
 
     function showResult(data) {
       const box = document.getElementById("resultBox");
       const title = document.getElementById("verdictTitle");
       const detail = document.getElementById("verdictDetail");
+      const notice = document.getElementById("redirectNotice");
 
       box.className = "result-box";
+      detail.textContent =
+        `검사한 URL: ${data.url} · 위험 확률: ${(data.probability * 100).toFixed(1)}%`;
 
       if (data.verdict === "Malicious") {
         box.classList.add("malicious");
         title.textContent = "🚨 위험한 사이트입니다";
+        notice.textContent = "접속이 완전히 차단되었습니다.";
+
       } else if (data.verdict === "Suspicious") {
         box.classList.add("suspicious");
         title.textContent = "⚠ 의심스러운 사이트입니다";
+        notice.innerHTML = `
+          이 사이트는 위험 요소가 일부 발견되어 로그인을 진행할 수 없습니다.<br>
+          URL을 다시 확인해주세요.<br><br>
+          <button class="check-btn" onclick="retryCheck()">다시 검사하기</button>
+        `;
+
       } else {
         box.classList.add("legitimate");
         title.textContent = "✅ 안전한 사이트입니다";
+        notice.textContent = "잠시 후 로그인 화면으로 이동합니다...";
+        setTimeout(() => {
+          window.location.href = "/login.html";
+        }, REDIRECT_DELAY_LEGITIMATE);
       }
 
-      detail.textContent =
-        `검사한 URL: ${data.url} · 위험 확률: ${(data.probability * 100).toFixed(1)}%`;
-
       box.style.display = "block";
+    }
+
+    function retryCheck() {
+      resetUI();
+      document.getElementById("pageTitle").textContent = "AI 피싱 URL 검사";
+      document.getElementById("pageSubtitle").textContent = "확인하고 싶은 웹사이트 주소를 입력하세요.";
+      document.getElementById("inputGroup").style.display = "flex";
+      document.getElementById("urlInput").value = "";
+      document.getElementById("urlInput").focus();
     }
 
     function showError(message) {
@@ -228,12 +264,9 @@
       document.getElementById("errorDetail").textContent = message;
     }
 
-    // ============================================================
-    // /check API 호출
-    // ============================================================
-
     async function runCheck() {
-      const targetUrl = document.getElementById("urlInput").value.trim();
+      const targetUrl =
+        redirectTarget || document.getElementById("urlInput").value.trim();
 
       if (!targetUrl) {
         alert("검사할 URL을 입력해주세요.");
@@ -256,8 +289,6 @@
         }
 
         const data = await response.json();
-        // data: { url, blocked, prediction, probability, verdict }
-
         showResult(data);
 
       } catch (err) {
@@ -268,7 +299,6 @@
         document.getElementById("checkBtn").disabled = false;
       }
     }
-
   </script>
 
 </body>
