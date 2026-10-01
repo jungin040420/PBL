@@ -1,403 +1,321 @@
-import pandas as pd
-import numpy as np
+"""
+url_train.py
+------------
+PhiUSIIL 기반 피싱 URL 탐지 모델 학습 파이프라인 (처음부터 재구성)
+
+흐름:
+  1) CSV 로드 및 스키마 점검 (실제 컬럼이 UCI 원본과 어떻게 다른지 자동 확인)
+  2) 라벨/피처 자동 분리, 결측치 처리
+  3) 범주형(TLD 등) 인코딩, 왜도 높은 수치형에 log1p, 이상치 클리핑
+  4) 1차 RandomForest로 "전체 피처" 중요도 분석 -> 상위 피처 자동 선정
+  5) 선정된 피처로 Logistic Regression / Random Forest / HistGradientBoosting
+     3개 모델을 StratifiedKFold 교차검증 + 홀드아웃 테스트로 비교
+  6) 가장 좋은 모델(F1 기준)을 최종 선택, 전처리기와 함께 joblib으로 저장
+
+사용법:
+  python url_train.py --csv PhiUSIIL_Phishing_URL_Dataset.csv --label-col label
+  (label 컬럼 이름이 다르면 --label-col 로 지정. 모르면 자동 추정 시도)
+"""
+
+import argparse
+import json
 import warnings
-import os
-import joblib
-from urllib.parse import urlparse
-
-warnings.filterwarnings('ignore')
-
-from sklearn.model_selection import (
-    GroupShuffleSplit,
-    GroupKFold,
-    cross_val_score
-)
-
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    roc_auc_score,
-    f1_score,
-    accuracy_score
-)
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-# ─────────────────────────────────────────────
-# 0. 설정
-# ─────────────────────────────────────────────
-
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent          # ...\PBL\python-risk
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+)
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
-DATA_PATH = BASE_DIR / "data" / "final_dataset_with_all_features_v3_1.csv"
-OUTPUT_DIR = BASE_DIR / "output"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+warnings.filterwarnings("ignore")
 
 RANDOM_STATE = 42
+SCRIPT_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = SCRIPT_DIR / "model_artifacts"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-# label: 0=benign, 1=defacement, 2=phishing, 3=malware
-# → 0(정상) vs 1,2,3(악성) 이진분류로 재정의한다.
+# URL 원문/식별자 성격이라 피처로 쓰면 안 되는 컬럼 후보 (있으면 자동 제거)
+ID_LIKE_COLUMNS = {
+    "FILENAME", "URL", "Domain", "Title", "url", "domain", "title", "index", "Index", "id", "ID",
+}
 
-# 학습에서 제외할 컬럼
-#   url            : 원본 문자열 (피처 아님)
-#   type           : label의 문자열 버전 (leakage)
-#   label          : 원본 4-클래스 라벨 (이진 라벨을 새로 만들어서 사용)
-#   domain         : 도메인 단위 group split용으로만 사용 (피처 아님)
-#   scan_date      : 스캔 시각 타임스탬프 (의미 없는 식별자성 컬럼)
-EXCLUDE_COLS = ["url", "type", "label", "domain", "scan_date"]
+# 이 목록에 있는 이름이 라벨 컬럼일 가능성이 높음 (자동 추정용)
+LABEL_CANDIDATES = {"label", "Label", "LABEL", "class", "Class", "target", "Target"}
 
-# 최종적으로 학습에 사용하는 피처 (URL 정적 피처 + web_* 실시간 스캔 피처 + phish_* 휴리스틱 피처)
-SELECTED_FEATURES = [
-    # ── URL 정적 피처 ──────────────────────────
-    "url_len", "@", "?", "-", "=", ".", "#", "%", "+", "$", "!", "*", ",", "//",
-    "digits", "letters", "abnormal_url", "https", "Shortining_Service",
-    "having_ip_address", "path_underscore_count",
-
-    # ── DOM / 실시간 스캔 피처 (web_*) ───────────
-    "web_http_status", "web_is_live", "web_ext_ratio", "web_unique_domains",
-    "web_favicon", "web_csp", "web_xframe", "web_hsts", "web_xcontent",
-    "web_security_score", "web_forms_count", "web_password_fields",
-    "web_hidden_inputs", "web_has_login", "web_ssl_valid",
-
-    # ── 피싱 휴리스틱 피처 (phish_*) ─────────────
-    "phish_urgency_words", "phish_security_words", "phish_brand_mentions",
-    "phish_brand_hijack", "phish_multiple_subdomains", "phish_long_path",
-    "phish_many_params", "phish_suspicious_tld",
-    "phish_adv_exact_brand_match", "phish_adv_brand_in_subdomain",
-    "phish_adv_brand_in_path", "phish_adv_hyphen_count",
-    "phish_adv_number_count", "phish_adv_suspicious_tld",
-    "phish_adv_long_domain", "phish_adv_many_subdomains",
-    "phish_adv_encoded_chars", "phish_adv_path_keywords",
-    "phish_adv_has_redirect", "phish_adv_many_params",
-
-    # ── 경로/기타 ──────────────────────────────
-    "path_has_hacked_terms", "suspicious_extension", "is_gov_edu",
-]
+# PhiUSIIL 논문 기준 "기존 피처에서 파생된" 값들. 정상 사이트 DB / 전체 코퍼스 통계를
+# 참조해야 계산되는 값이라, 실시간으로 URL 하나만 보고 똑같이 재현하기 사실상 불가능하다.
+# (학습-서빙 간 피처 불일치 = 오탐/미탐의 주 원인으로 확인됨 -> 자동 제거)
+LEAKY_COLUMNS = {"URLSimilarityIndex", "TLDLegitimateProb", "URLCharProb"}
 
 
-# ─────────────────────────────────────────────
-# 1. 데이터 로드
-# ─────────────────────────────────────────────
-
-def load_data(path: str) -> pd.DataFrame:
-    print(f"[1/5] 데이터 로드 중: {path}")
-
-    df = pd.read_csv(path)
-
-    print(f"  → 원본 shape: {df.shape}")
-
-    print("  → 원본 label(4-class) 분포:")
-    print(df["label"].value_counts())
-
-    # ★ 이진 라벨 재정의: 0(benign) → 0, 1/2/3(defacement/phishing/malware) → 1
-    df["label"] = (df["label"] != 0).astype(int)
-
-    print("  → 이진 변환 후 label 분포 (0=정상, 1=악성):")
-    print(df["label"].value_counts())
-
-    # domain 결측치 처리: group split 기준이므로, 없으면 url 자체를 그룹으로 사용
-    before = df["domain"].isnull().sum()
-    if before > 0:
-        print(f"  → domain 결측 {before}건 → url로 대체 (단일 그룹 처리)")
-        df["domain"] = df["domain"].fillna(df["url"])
-
-    print(f"  → 고유 도메인 수: {df['domain'].nunique()}")
-
+def load_and_inspect(csv_path: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    print(f"[1/6] 데이터 로드 완료: {df.shape[0]}행 x {df.shape[1]}열")
+    print("컬럼 목록:")
+    print(list(df.columns))
+    print("\n결측치가 있는 컬럼:")
+    na_counts = df.isna().sum()
+    print(na_counts[na_counts > 0] if na_counts.sum() > 0 else "  (없음)")
     return df
 
 
-# ─────────────────────────────────────────────
-# 2. 피처 선택
-# ─────────────────────────────────────────────
-
-def select_features(df: pd.DataFrame) -> pd.DataFrame:
-    print("\n[2/5] 피처 선택")
-
-    cols = SELECTED_FEATURES + ["label", "domain"]
-    df = df[cols].copy()
-
-    print(f"  → 선택된 피처 수: {len(SELECTED_FEATURES)}")
-
-    return df
-
-
-# ─────────────────────────────────────────────
-# 3. 전처리
-# ─────────────────────────────────────────────
-
-def preprocess(df: pd.DataFrame):
-
-    print("\n[3/5] 전처리")
-
-    # 결측치 처리
-    if df.isnull().sum().sum() > 0:
-        print("  [결측치] 처리 중...")
-
-        for col in df.columns:
-            if df[col].isnull().sum() == 0:
-                continue
-
-            if df[col].dtype == object:
-                df[col] = df[col].fillna(df[col].mode()[0])
-            else:
-                df[col] = df[col].fillna(df[col].median())
-    else:
-        print("  [결측치] 없음 ✓")
-
-    # 그룹 저장 (도메인 단위로 train/test가 섞이지 않도록)
-    groups = df["domain"]
-
-    # X / y 분리
-    X = df.drop(columns=["label", "domain"])
-    y = df["label"]
-
-    # 이진(0/1) 컬럼은 스케일링/로그변환에서 제외 (동적으로 판별)
-    binary_cols = [c for c in X.columns if X[c].nunique() <= 2]
-    numeric_cols = [c for c in X.columns if c not in binary_cols]
-
-    print(f"  → 이진 피처 {len(binary_cols)}개 / 수치 피처 {len(numeric_cols)}개")
-
-    # 로그 변환: 왜도(skew)가 큰(우측 편향) 수치 컬럼에만 log1p 적용
-    # (예측 시점에도 동일하게 재현해야 하므로 컬럼 목록을 저장해둔다)
-    log_cols = []
-    for col in numeric_cols:
-        if (X[col] >= 0).all() and X[col].skew() > 1.0:
-            X[col] = np.log1p(X[col])
-            log_cols.append(col)
-
-    print(f"  [로그변환] log1p 적용 컬럼 {len(log_cols)}개: {log_cols}")
-
-    # 이상치 clipping (수치 컬럼만, 99.5% 지점 기준)
-    # → 예측 시점에도 동일한 상한값으로 clip해야 하므로 값 자체를 저장해둔다
-    print("  [이상치] 99.5% clipping")
-
-    clip_upper = {}
-    for col in numeric_cols:
-        upper = X[col].quantile(0.995)
-        X[col] = X[col].clip(upper=upper)
-        clip_upper[col] = upper
-
-    print(f"  → X shape: {X.shape}")
-
-    return X, y, groups, binary_cols, numeric_cols, log_cols, clip_upper
-
-
-# ─────────────────────────────────────────────
-# 4. 학습 / 평가
-# ─────────────────────────────────────────────
-
-def train_and_evaluate(X, y, groups, binary_cols, numeric_cols):
-
-    print("\n[4/5] 학습 및 평가")
-
-    # Group-based split
-    print("  [분할] GroupShuffleSplit")
-
-    gss = GroupShuffleSplit(
-        n_splits=1,
-        test_size=0.2,
-        random_state=RANDOM_STATE
+def resolve_label_column(df: pd.DataFrame, given: str | None) -> str:
+    if given and given in df.columns:
+        return given
+    for cand in LABEL_CANDIDATES:
+        if cand in df.columns:
+            print(f"라벨 컬럼을 자동으로 '{cand}'(으)로 추정했습니다.")
+            return cand
+    raise ValueError(
+        "라벨 컬럼을 찾지 못했습니다. --label-col 옵션으로 정확한 컬럼명을 지정해주세요.\n"
+        f"현재 컬럼: {list(df.columns)}"
     )
 
-    train_idx, test_idx = next(gss.split(X, y, groups=groups))
 
-    X_train = X.iloc[train_idx]
-    X_test = X.iloc[test_idx]
+def clean_and_split_columns(df: pd.DataFrame, label_col: str):
+    y_raw = df[label_col]
+    # 라벨이 문자열(legit/phish 등)이면 숫자로 변환
+    if y_raw.dtype == object:
+        le_label = LabelEncoder()
+        y = le_label.fit_transform(y_raw)
+        print(f"라벨 인코딩: {dict(zip(le_label.classes_, le_label.transform(le_label.classes_)))}")
+    else:
+        y = y_raw.to_numpy()
+        le_label = None
 
-    y_train = y.iloc[train_idx]
-    y_test = y.iloc[test_idx]
+    X = df.drop(columns=[label_col])
+    drop_cols = [c for c in X.columns if c in ID_LIKE_COLUMNS]
+    if drop_cols:
+        print(f"식별자/원문 성격 컬럼 제거: {drop_cols}")
+        X = X.drop(columns=drop_cols)
 
-    group_train = groups.iloc[train_idx]
-
-    print(f"  Train: {len(X_train)}")
-    print(f"  Test : {len(X_test)}")
-    print(f"  Train domains: {group_train.nunique()}")
-    print(f"  Test domains : {groups.iloc[test_idx].nunique()}")
-
-    # 스케일링 (이진 컬럼 제외, 수치 컬럼만)
-    scale_cols = numeric_cols
-
-    scaler = StandardScaler()
-
-    X_train_sc = X_train.copy()
-    X_test_sc = X_test.copy()
-
-    X_train_sc[scale_cols] = scaler.fit_transform(X_train[scale_cols])
-    X_test_sc[scale_cols] = scaler.transform(X_test[scale_cols])
-
-    # 모델
-    models = {
-
-        "Random Forest": RandomForestClassifier(
-            n_estimators=200,
-            random_state=RANDOM_STATE,
-            class_weight="balanced",
-            n_jobs=-1
+    leaky_present = [c for c in X.columns if c in LEAKY_COLUMNS]
+    if leaky_present:
+        print(
+            f"실시간 재현 불가능한 leaky 피처 제거: {leaky_present} "
+            "(정상 사이트 DB/전체 코퍼스 통계 필요 -> 실서비스 피처 추출기와 불일치 유발)"
         )
+        X = X.drop(columns=leaky_present)
 
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
+    print(f"수치형 피처 {len(numeric_cols)}개, 범주형 피처 {len(categorical_cols)}개")
+    return X, y, numeric_cols, categorical_cols, le_label
+
+
+def encode_categoricals(X: pd.DataFrame, categorical_cols: list[str]):
+    encoders = {}
+    for col in categorical_cols:
+        X[col] = X[col].fillna("__missing__").astype(str)
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col])
+        encoders[col] = le
+    return X, encoders
+
+
+def transform_numeric(X: pd.DataFrame, numeric_cols: list[str]):
+    """
+    학습용 numeric preprocessing.
+    inference에서 동일하게 재현할 수 있도록
+    median / log1p / clipping 정보를 반환한다.
+    """
+    X = X.copy()
+
+    medians = {}
+    log1p_columns = []
+    clip_bounds = {}
+
+    # 1. median 저장 + 결측치 처리
+    for col in numeric_cols:
+        X[col] = pd.to_numeric(X[col], errors="coerce")
+
+        median = float(X[col].median())
+        medians[col] = median
+
+        X[col] = X[col].fillna(median)
+
+    # 2. log1p 적용 여부 저장
+    for col in numeric_cols:
+        col_min = X[col].min()
+        skew = X[col].skew()
+
+        if (
+            col_min >= 0
+            and abs(skew) > 1.0
+        ):
+            X[col] = np.log1p(X[col])
+            log1p_columns.append(col)
+
+    # 3. clipping 경계 저장
+    for col in numeric_cols:
+        lo = float(X[col].quantile(0.01))
+        hi = float(X[col].quantile(0.99))
+
+        clip_bounds[col] = [lo, hi]
+
+        X[col] = X[col].clip(lo, hi)
+
+    preprocessing_meta = {
+        "numeric_medians": medians,
+        "log1p_columns": log1p_columns,
+        "clip_bounds": clip_bounds,
     }
 
+    return X, preprocessing_meta
+
+
+def select_top_features(X: pd.DataFrame, y: np.ndarray, top_ratio: float = 0.95):
+    """전체 피처로 1차 RandomForest를 학습해 중요도 상위 피처를 선정."""
+    print("\n[3/6] 전체 피처 중요도 분석 중 (1차 RandomForest)...")
+    rf_probe = RandomForestClassifier(
+        n_estimators=150, max_depth=20, random_state=RANDOM_STATE, n_jobs=-1, class_weight="balanced"
+    )
+    rf_probe.fit(X, y)
+    importances = pd.Series(rf_probe.feature_importances_, index=X.columns).sort_values(ascending=False)
+
+    cumulative = importances.cumsum() / importances.sum()
+    n_selected = int((cumulative <= top_ratio).sum()) + 1
+    n_selected = max(min(n_selected, len(importances)), min(15, len(importances)))
+    selected = importances.index[:n_selected].tolist()
+
+    print(f"중요도 상위 {n_selected}개 피처 선정 (누적 중요도 {top_ratio*100:.0f}% 기준)")
+    print(importances.head(15).to_string())
+    return selected, importances
+
+
+def train_and_compare(X_train, X_test, y_train, y_test):
+    models = {
+        "LogisticRegression": LogisticRegression(
+            max_iter=2000, class_weight="balanced", random_state=RANDOM_STATE
+        ),
+        "RandomForest": RandomForestClassifier(
+            n_estimators=150, max_depth=20, random_state=RANDOM_STATE, n_jobs=-1, class_weight="balanced"
+        ),
+        "HistGradientBoosting": HistGradientBoostingClassifier(
+            max_iter=200, random_state=RANDOM_STATE
+        ),
+    }
+
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
     results = {}
 
+    print("\n[5/6] 모델별 5-fold 교차검증 + 홀드아웃 테스트 평가")
     for name, model in models.items():
+        cv_scores = cross_val_score(model, X_train, y_train, cv=skf, scoring="f1", n_jobs=-1)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        test_f1 = f1_score(y_test, y_pred)
+        cm = confusion_matrix(y_test, y_pred)
 
-        print(f"\n▶ {name}")
-
-        cv = GroupKFold(n_splits=5)
-
-        cv_auc = cross_val_score(
-            model,
-            X_train_sc,
-            y_train,
-            cv=cv,
-            groups=group_train,
-            scoring="roc_auc",
-            n_jobs=-1
-        )
-
-        print(f"  Group CV ROC-AUC: {cv_auc.mean():.4f} ± {cv_auc.std():.4f}")
-
-        model.fit(X_train_sc, y_train)
-
-        y_pred = model.predict(X_test_sc)
-        y_prob = model.predict_proba(X_test_sc)[:, 1]
-
-        acc = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred, average="weighted")
-        auc = roc_auc_score(y_test, y_prob)
-
-        print(f"  Accuracy : {acc:.4f}")
-        print(f"  F1 Score : {f1:.4f}")
-        print(f"  ROC-AUC  : {auc:.4f}")
-
-        print(
-            classification_report(
-                y_test,
-                y_pred,
-                target_names=["Legitimate", "Malicious"]
-            )
-        )
+        print(f"\n--- {name} ---")
+        print(f"CV F1 (train, 5-fold): {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+        print(f"Test F1 (holdout):     {test_f1:.4f}")
+        print("Confusion Matrix (row=실제, col=예측) [0=phishing, 1=legit 기준은 라벨 인코딩에 따름]:")
+        print(cm)
+        print(classification_report(y_test, y_pred, digits=4))
 
         results[name] = {
             "model": model,
-            "y_pred": y_pred,
-            "y_prob": y_prob,
-            "acc": acc,
-            "f1": f1,
-            "auc": auc,
-            "cv_auc_mean": cv_auc.mean(),
-            "cv_auc_std": cv_auc.std(),
+            "cv_f1_mean": cv_scores.mean(),
+            "cv_f1_std": cv_scores.std(),
+            "test_f1": test_f1,
+            "confusion_matrix": cm.tolist(),
         }
 
-    return results, X_test, y_test, X_train, scaler, scale_cols
+    return results
 
 
-# ─────────────────────────────────────────────
-# 5. 시각화
-# ─────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser()
+    SCRIPT_DIR = Path(__file__).parent
+    default_csv = SCRIPT_DIR / "data" / "PhiUSIIL_Phishing_URL_Dataset.csv"
+    parser.add_argument("--csv", default=str(default_csv), help="PhiUSIIL CSV 파일 경로")
+    parser.add_argument("--label-col", default=None, help="라벨 컬럼명 (미지정 시 자동 추정)")
+    parser.add_argument("--top-ratio", type=float, default=0.95, help="피처 중요도 누적 비율 기준")
+    args = parser.parse_args()
 
-def visualize(results, X_train):
+    df = load_and_inspect(args.csv)
+    label_col = resolve_label_column(df, args.label_col)
 
-    print("\n[5/5] 시각화 저장 중...")
+    X, y, numeric_cols, categorical_cols, label_encoder = clean_and_split_columns(df, label_col)
 
-    rf_model = results["Random Forest"]["model"]
+    print("\n[2/6] 전처리 시작 (범주형 인코딩, log1p, 이상치 클리핑)")
+    X, cat_encoders = encode_categoricals(X, categorical_cols)
+    X, numeric_preprocessing_meta = transform_numeric(X, numeric_cols)
 
-    importances = pd.Series(
-        rf_model.feature_importances_,
-        index=X_train.columns
+    selected_features, importances = select_top_features(X, y, top_ratio=args.top_ratio)
+    X_selected = X[selected_features]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_selected, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
     )
 
-    importances = importances.sort_values(ascending=True).tail(25)
+    print("\n[4/6] StandardScaler 학습 (train 기준)")
+    scaler = StandardScaler()
+    X_train_scaled = pd.DataFrame(
+        scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index
+    )
+    X_test_scaled = pd.DataFrame(
+        scaler.transform(X_test), columns=X_test.columns, index=X_test.index
+    )
 
-    plt.figure(figsize=(10, 9))
-    importances.plot(kind="barh", color="skyblue")
-    plt.title("Feature Importance (Random Forest)")
-    plt.xlabel("Importance")
-    plt.tight_layout()
+    results = train_and_compare(X_train_scaled, X_test_scaled, y_train, y_test)
 
-    out_path = os.path.join(OUTPUT_DIR, "feature_importance.png")
-    plt.savefig(out_path)
+    best_name = max(results, key=lambda k: results[k]["test_f1"])
+    best_model = results[best_name]["model"]
+    print(f"\n[6/6] 최종 선택 모델: {best_name} (Test F1: {results[best_name]['test_f1']:.4f})")
 
-    print(f"  → 저장 완료: {out_path}")
+    joblib.dump(best_model, OUTPUT_DIR / "phishing_model.joblib")
+    joblib.dump(scaler, OUTPUT_DIR / "scaler.joblib")
+    joblib.dump(cat_encoders, OUTPUT_DIR / "categorical_encoders.joblib")
+    if label_encoder is not None:
+        joblib.dump(label_encoder, OUTPUT_DIR / "label_encoder.joblib")
 
+    meta = {
+        "best_model": best_name,
+        "selected_features": selected_features,
+        "numeric_cols_used": [c for c in numeric_cols if c in selected_features],
+        "categorical_cols_used": [c for c in categorical_cols if c in selected_features],
+        "test_f1": results[best_name]["test_f1"],
+        "all_model_scores": {
+            k: {"cv_f1_mean": v["cv_f1_mean"], "test_f1": v["test_f1"]} for k, v in results.items()
+        },
+    }
+    with open(OUTPUT_DIR / "training_meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
 
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
+    with open(
+        OUTPUT_DIR / "preprocessing_meta.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            numeric_preprocessing_meta,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    print(f"\n저장 완료: {OUTPUT_DIR.resolve()}")
+    print(" - phishing_model.joblib      : 최종 선택된 모델")
+    print(" - scaler.joblib              : StandardScaler (실시간 추론 시 반드시 동일 순서/피처로 사용)")
+    print(" - categorical_encoders.joblib: TLD 등 범주형 인코더")
+    print(" - training_meta.json         : 선정된 피처 목록, 각 모델 성능 요약")
+    print(
+        "\n주의: url_feature_extractor.py에서 실시간으로 만드는 피처가 여기서 선정된 "
+        f"{len(selected_features)}개 피처와 '이름/순서/전처리 방식'까지 정확히 같아야 합니다. "
+        "training_meta.json의 selected_features 리스트를 실시간 추출 코드와 대조하세요."
+    )
+
 
 if __name__ == "__main__":
-
-    print("=" * 55)
-    print("Malicious URL Detection - Domain-aware ML Pipeline")
-    print("(URL Feature + DOM/Web Scan Feature + Phishing Heuristic Feature)")
-    print("=" * 55)
-
-    df = load_data(DATA_PATH)
-    df = select_features(df)
-
-    X, y, groups, binary_cols, numeric_cols, log_cols, clip_upper = preprocess(df)
-
-    results, X_test, y_test, X_train, scaler, scale_cols = train_and_evaluate(
-        X, y, groups, binary_cols, numeric_cols
-    )
-
-    visualize(results, X_train)
-
-    print("\n" + "=" * 55)
-    print("최종 요약")
-    print("=" * 55)
-
-    best_name = max(results, key=lambda x: results[x]["auc"])
-    best = results[best_name]
-
-    print(f"최고 모델 : {best_name}")
-    print(f"Accuracy : {best['acc']:.4f}")
-    print(f"F1 Score : {best['f1']:.4f}")
-    print(f"ROC-AUC  : {best['auc']:.4f}")
-    print("=" * 55)
-
-    # 모델 저장
-    os.makedirs("output", exist_ok=True)
-
-    joblib.dump(
-        results["Random Forest"]["model"],
-        os.path.join(OUTPUT_DIR, "rf_model.pkl")
-    )
-
-    joblib.dump(
-        scaler,
-        os.path.join(OUTPUT_DIR, "scaler.pkl")
-    )
-
-    joblib.dump(
-        scale_cols,
-        os.path.join(OUTPUT_DIR, "scale_cols.pkl")
-    )
-
-    joblib.dump(
-        SELECTED_FEATURES,
-        os.path.join(OUTPUT_DIR, "selected_features.pkl")
-    )
-
-    joblib.dump(
-        log_cols,
-        os.path.join(OUTPUT_DIR, "log_cols.pkl")
-    )
-
-
-    joblib.dump(
-        clip_upper,
-        os.path.join(OUTPUT_DIR, "clip_upper.pkl")
-    )
-
-    print(f"✅ 모델/전처리 객체 저장 완료 → {OUTPUT_DIR}/")
+    main()

@@ -34,3 +34,6 @@ Thumbs.db
 
 #데이터셋
 *.csv
+
+# 학습된 모델
+*.joblib

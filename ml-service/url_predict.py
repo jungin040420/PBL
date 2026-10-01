@@ -12,6 +12,7 @@ feature_extractor.py 의 실시간 피처 추출을 결합해서
 import asyncio
 import sys
 import os
+from xml.parsers.expat import model
 import joblib
 import numpy as np
 import pandas as pd
@@ -131,17 +132,6 @@ async def predict_url(url, artifacts):
 
     X = build_feature_row(raw_feature, artifacts)
 
-    model = artifacts["model"]
-
-    print("\n=== MODEL FEATURE IMPORTANCE ===")
-
-    for name, importance in sorted(
-        zip(X.columns, model.feature_importances_),
-        key=lambda x: x[1],
-        reverse=True
-    ):
-        print(f"{name:35s} = {importance:.4f}")
-
     # 악성 확률
     prob = float(model.predict_proba(X)[0, 1])
 
@@ -162,17 +152,14 @@ async def predict_url(url, artifacts):
     ####################################################
 
     if prob >= 0.90:
-
-        prediction = 1          # 로그인 차단
+        prediction = 1         
         verdict = "🚨 Malicious"
 
     elif prob >= 0.70:
-
-        prediction = 0          # 로그인은 차단하지 않음
+        prediction = 0          
         verdict = "⚠ Suspicious"
 
     else:
-
         prediction = 0
         verdict = "✅ Legitimate"
 

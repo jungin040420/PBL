@@ -1,0 +1,63 @@
+{
+  "best_model": "HistGradientBoosting",
+  "selected_features": [
+    "NoOfExternalRef",
+    "LineOfCode",
+    "NoOfSelfRef",
+    "NoOfImage",
+    "NoOfJS",
+    "HasSocialNet",
+    "NoOfCSS",
+    "IsHTTPS",
+    "HasCopyrightInfo",
+    "HasDescription",
+    "HasSubmitButton",
+    "NoOfOtherSpecialCharsInURL",
+    "DegitRatioInURL",
+    "LargestLineLength",
+    "DomainTitleMatchScore",
+    "NoOfiFrame",
+    "NoOfDegitsInURL",
+    "NoOfEmptyRef",
+    "HasHiddenFields",
+    "URLLength"
+  ],
+  "numeric_cols_used": [
+    "URLLength",
+    "NoOfDegitsInURL",
+    "DegitRatioInURL",
+    "NoOfOtherSpecialCharsInURL",
+    "IsHTTPS",
+    "LineOfCode",
+    "LargestLineLength",
+    "DomainTitleMatchScore",
+    "HasDescription",
+    "NoOfiFrame",
+    "HasSocialNet",
+    "HasSubmitButton",
+    "HasHiddenFields",
+    "HasCopyrightInfo",
+    "NoOfImage",
+    "NoOfCSS",
+    "NoOfJS",
+    "NoOfSelfRef",
+    "NoOfEmptyRef",
+    "NoOfExternalRef"
+  ],
+  "categorical_cols_used": [],
+  "test_f1": 0.9997590406109247,
+  "all_model_scores": {
+    "LogisticRegression": {
+      "cv_f1_mean": 0.999110177557591,
+      "test_f1": 0.9992399666326814
+    },
+    "RandomForest": {
+      "cv_f1_mean": 0.9996107352332173,
+      "test_f1": 0.9996107723388875
+    },
+    "HistGradientBoosting": {
+      "cv_f1_mean": 0.9996663497929943,
+      "test_f1": 0.9997590406109247
+    }
+  }
+}
