@@ -331,14 +331,26 @@ exports.loginFinish = async (req, res) => {
             ? prevContext.ipHash !== currentIpHash : false;
         context.userAgentChanged = context.hasPreviousContext
             ? prevContext.uaHash !== currentUaHash : false;
-        context.locationChanged = context.hasPreviousContext
+        context.regionChanged = context.hasPreviousContext
             ? prevContext.countryHash !== currentCountryHash : false;
+        context.locationChanged = context.regionChanged;
+
+        console.log('[REGION CHANGE DEBUG]', {
+            currentCountry: context.country,
+            previousCountry: prevContext.country || 'UNKNOWN',
+            hasPreviousContext: context.hasPreviousContext,
+            countryHashChanged: context.hasPreviousContext
+                ? prevContext.countryHash !== currentCountryHash
+                : false,
+            regionChanged: context.regionChanged,
+        });
 
         await redisClient.hSet(contextKey, {
             deviceHash: String(currentDeviceHash || ''),
             ipHash: String(currentIpHash || ''),
             uaHash: String(currentUaHash || ''),
             countryHash: String(currentCountryHash || ''),
+            country: String(context.country || 'UNKNOWN'),
         });
         await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
 

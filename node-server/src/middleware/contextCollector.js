@@ -14,7 +14,7 @@ const collectContext = (req, res, next) => {
   const loginHour = hour;
   const dayOfWeek = now.getDay();
   const geo = geoip.lookup(ip);
-  const country = geo?.country || 'KR';
+  const country = (geo?.country || 'UNKNOWN').toUpperCase();
 
   req.context = {
     ip,
@@ -28,7 +28,15 @@ const collectContext = (req, res, next) => {
   };
 
 
-  console.log('수집한 컨텍스트:', {
+  console.log('[GEOIP DEBUG]', {
+    clientIp: ip,
+    forwardedFor: req.headers['x-forwarded-for'] || null,
+    realIp: req.headers['x-real-ip'] || null,
+    geo,
+    country,
+  });
+
+  console.log('[CONTEXT DEBUG]', {
     hasIp: Boolean(ip),
     hasUserAgent: Boolean(userAgent),
     deviceInfo,
