@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   username      VARCHAR(50)  NOT NULL UNIQUE,
   display_name  VARCHAR(100) NOT NULL,
   email         VARCHAR(100) NOT NULL UNIQUE,
+  last_login_region VARCHAR(10) DEFAULT NULL,
   created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP
 );
 

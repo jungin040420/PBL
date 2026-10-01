@@ -431,7 +431,6 @@ exports.loginFinish = async (req, res) => {
             const session = await sessionManager.createSession(
                 userId, context.ip, context.userAgent, context.fingerprint, 'RE_AUTH'
             );
-
             try {
                 await otpService.generateAndSendOtp(userId, email);
             } catch (otpError) {
