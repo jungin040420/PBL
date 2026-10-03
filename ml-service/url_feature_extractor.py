@@ -6,7 +6,9 @@ URL + 실제 웹페이지 DOM/HTML 기반 피싱 탐지
 동작 방식
 1. 현재 URL을 실제 브라우저로 접속
 2. 최종 URL의 도메인이 공식 도메인이면 AI 모델 없이 TRUSTED_SITE
-3. 공식 도메인이 아니면 AI 모델 실행
+3. 공식 도메인이 아닌데 도메인/제목/본문이 공식 브랜드를 사칭하면
+   AI 모델 없이 PHISHING (BRAND_KEYWORDS 기준)
+4. 그 외에는 AI 모델 실행
    - prediction == 1 -> LEGIT
    - prediction == 0 -> PHISHING
 
@@ -23,7 +25,9 @@ import ipaddress
 import json
 import math
 import re
+import unicodedata
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -57,6 +61,25 @@ SOCIAL_DOMAINS = {
     "facebook.com", "instagram.com", "twitter.com", "x.com",
     "linkedin.com", "youtube.com", "tiktok.com",
 }
+
+# 브랜드 사칭 탐지: 공식 도메인이 아닌데 이 이름을 쓰면 AI 판단 없이 PHISHING 처리
+BRAND_KEYWORDS = {"myfido2mfa"}
+
+# 도메인 라벨이 브랜드명과 이 비율 이상 비슷하면 오타 도메인(typosquatting)으로 판단 (0~1)
+BRAND_SIMILARITY_THRESHOLD = 0.85
+
+# 키릴/그리스 문자 등 라틴 문자와 비슷하게 생긴 문자 -> 라틴 문자
+CONFUSABLES = {
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p",
+    "\u0441": "c", "\u0443": "y", "\u0445": "x", "\u0456": "i",
+    "\u0458": "j", "\u0455": "s", "\u04bb": "h", "\u0501": "d",
+    "\u03bf": "o", "\u03bd": "v", "\u0251": "a", "\u0131": "i",
+}
+
+# 숫자/기호로 글자를 흉내내는 경우 (0->o, 1/l->i ...)
+LOOKALIKE_TABLE = str.maketrans(
+    {"0": "o", "1": "i", "l": "i", "3": "e", "5": "s", "$": "s"}
+)
 
 
 # ============================================================
@@ -289,7 +312,7 @@ def extract_page_features(url: str, timeout_ms: int = 30000):
         "HasHiddenFields": int(len(hidden_fields) > 0),
     }
 
-    return features, final_url, title
+    return features, final_url, title, visible_text
 
 
 # ============================================================
@@ -415,6 +438,93 @@ def run_ai_prediction(X, meta: dict) -> dict:
 
 
 # ============================================================
+# 브랜드 사칭 탐지 (규칙 기반)
+# ============================================================
+
+def _normalize_for_brand(text: str) -> str:
+    """
+    비교용 정규화: 소문자화, 악센트 제거, 유사 문자 치환,
+    rn->m / vv->w, 0->o / 1->i 등. 브랜드명에도 똑같이 적용한다.
+    """
+    text = unicodedata.normalize("NFKD", text.lower())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = "".join(CONFUSABLES.get(ch, ch) for ch in text)
+    text = text.replace("rn", "m").replace("vv", "w")
+    return text.translate(LOOKALIKE_TABLE)
+
+
+def _decode_label(label: str) -> str:
+    """punycode(xn--) 라벨을 유니코드로 복원"""
+    if label.startswith("xn--"):
+        try:
+            return label.encode("ascii").decode("idna")
+        except Exception:
+            return label
+    return label
+
+
+def check_brand_domain(url: str):
+    """
+    도메인이 공식 브랜드를 흉내 내는지 검사. 의심되면 사유(str), 아니면 None.
+    공식 도메인 여부는 호출 전에 이미 걸러졌다고 가정한다.
+
+    잡는 예:
+      myfido2mfa-login.com      (브랜드명 포함)
+      login.myfido2mfa.evil.com (서브도메인에 브랜드명)
+      myfid02mfa.com            (0 <-> o)
+      myfido2rnfa.com           (rn <-> m)
+      myfido2mfaa.com           (오타)
+      xn--...                   (키릴 문자 등 유사 문자)
+    """
+    host = get_domain(url)
+    if not host:
+        return None
+
+    labels = [_decode_label(label) for label in host.split(".")]
+    compact = _normalize_for_brand("".join(labels)).replace("-", "").replace("_", "")
+
+    for brand in BRAND_KEYWORDS:
+        target = _normalize_for_brand(brand)
+
+        if target in compact:
+            return f"공식 도메인이 아닌데 도메인에 브랜드명 '{brand}'이(가) 포함되어 있습니다: {host}"
+
+        for label in labels:
+            normalized = _normalize_for_brand(label).replace("-", "").replace("_", "")
+            if not normalized:
+                continue
+            ratio = SequenceMatcher(None, normalized, target).ratio()
+            if ratio >= BRAND_SIMILARITY_THRESHOLD:
+                return (
+                    f"도메인이 공식 브랜드 '{brand}'과(와) 매우 비슷합니다 "
+                    f"(유사도 {ratio:.2f}): {host}"
+                )
+
+    return None
+
+
+def check_brand_in_page(title: str, visible_text: str):
+    """
+    공식 도메인이 아닌 페이지의 제목/본문에 브랜드명이 있으면 사유(str), 없으면 None.
+    공백/기호를 제거한 뒤 비교하므로 'MyFIDO2 MFA' 같은 표기도 잡힌다.
+    """
+    def squash(text: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    title_squashed = squash(title)
+    body_squashed = squash(visible_text)
+
+    for brand in BRAND_KEYWORDS:
+        target = squash(brand)
+        if target in title_squashed:
+            return f"공식 도메인이 아닌 페이지의 제목에 브랜드명 '{brand}'이(가) 있습니다."
+        if target in body_squashed:
+            return f"공식 도메인이 아닌 페이지 본문에 브랜드명 '{brand}'이(가) 있습니다."
+
+    return None
+
+
+# ============================================================
 # 전체 파이프라인
 # ============================================================
 
@@ -428,7 +538,7 @@ def predict_url(url: str) -> dict:
     features = extract_url_features(url)
 
     print("[2/3] 실제 웹페이지 분석...")
-    page_features, final_url, title = extract_page_features(url)
+    page_features, final_url, title, visible_text = extract_page_features(url)
     features.update(page_features)
 
     print("[INFO] 최종 URL:", final_url)
@@ -451,6 +561,32 @@ def predict_url(url: str) -> dict:
             "test_f1": None,
             "selected_features": [],
             "verdict_reason": "등록된 공식 도메인과 일치합니다.",
+        }
+
+    # 공식 도메인이 아닌데 브랜드를 사칭하면 AI 판단 없이 바로 PHISHING
+    impersonation_reason = (
+        check_brand_domain(final_url)
+        or check_brand_domain(url)
+        or check_brand_in_page(title, visible_text)
+    )
+
+    if impersonation_reason:
+        print("[INFO] 브랜드 사칭 규칙에 해당합니다. AI 모델 예측을 건너뜁니다.")
+        print("[INFO] 사유:", impersonation_reason)
+        return {
+            "url": url,
+            "final_url": final_url,
+            "title": title,
+            "official_domain": False,
+            "prediction": 0,
+            "label": "PHISHING",
+            "verdict": "PHISHING",
+            "is_phishing": True,
+            "phishing_probability": 1.0,
+            "model": "BRAND_IMPERSONATION_RULE",
+            "test_f1": None,
+            "selected_features": [],
+            "verdict_reason": impersonation_reason,
         }
 
     print("[INFO] 공식 도메인이 아닙니다. AI 모델을 실행합니다.")
