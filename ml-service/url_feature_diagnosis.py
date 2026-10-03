@@ -277,7 +277,7 @@ def extract_live_features(extractor, url):
     url_features = extractor.extract_url_features(url)
 
     # 페이지 feature
-    page_features, final_url, title = (
+    page_features, final_url, title, _visible_text = (
         extractor.extract_page_features(url)
     )
 
