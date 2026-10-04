@@ -1,3 +1,4 @@
+import time
 import json
 import os
 from datetime import datetime, timezone, timedelta
@@ -30,6 +31,12 @@ app = FastAPI(
     version="2.3.0",
 )
 
+@app.middleware("http")
+async def timing(request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    print(f"[TIMING] {request.url.path} total={(time.perf_counter() - start) * 1000:.1f}ms")
+    return response
 
 # ============================================================
 # 기본 설정
@@ -1981,6 +1988,9 @@ def calculate_risk(
     data: LogData,
 ) -> RiskResponse:
 
+    t={};
+    s=time.perf_counter()
+
     event_id = (
         generate_event_id()
     )
@@ -1998,6 +2008,7 @@ def calculate_risk(
     ) = calculate_trust_score(
         data
     )
+    t["rule"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 
 
     print(
@@ -2011,6 +2022,7 @@ def calculate_risk(
             data
         )
     )
+    t["ml"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 
 
     if (
@@ -2111,16 +2123,19 @@ def calculate_risk(
     )
 
 
+    s=time.perf_counter()
     save_ml_feature_log(
         data,
         event_id,
     )
+    t["db_feature"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 
 
     save_ml_prediction(
         event_id,
         ml_result,
     )
+    t["db_pred"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 
 
     save_risk_log(
@@ -2128,8 +2143,10 @@ def calculate_risk(
         data,
         risk_response,
     )
+    t["log_es"] = (time.perf_counter() - s) * 1000
 
 
+    print(f"[TIMING]analyze {t}")
     print(
         "Risk 분석 완료:",
         {
