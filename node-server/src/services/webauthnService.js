@@ -14,6 +14,7 @@ exports.generateRegistrationOptions = async (username, displayName) => {
     challengeId,
     userId,
     rpId,
+    userVerification: 'required',
   };
 };
 
@@ -45,5 +46,6 @@ exports.generateLoginOptions = async (username) => {
     challengeId,
     rpId,
     allowCredentials,
+    userVerification: 'required',
   };
 };
