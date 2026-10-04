@@ -226,17 +226,7 @@ def load() -> Optional[IsolationForest]:
 
     try:
 
-        _model = None
-def get_model():
-    global _model
-    if _model is None:
-        _model = joblib.load(...)
-    return _model
-
-# 느린 경우: 호출될 때마다 디스크에서 로드
-def predict(features):
-    model = joblib.load(...)
-    return model.decision_function(...)
+        
         model = joblib.load(
             MODEL_PATH
         )
