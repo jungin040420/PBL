@@ -88,6 +88,9 @@ exports.verifyRegistration = async (username, email, challengeId, credential, au
 
 exports.verifyLogin = async (username, challengeId, credential) => {
 
+  const t = {};
+  let s = performance.now();
+
   const clientDataJSON = JSON.parse(
     Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8')
   );
@@ -98,6 +101,7 @@ exports.verifyLogin = async (username, challengeId, credential) => {
     challengeId,
     submittedChallenge
   );
+  t.challenge = performance.now() - s; s = performance.now();
 
   if (!challengeResult.valid) {
     throw new Error(`challenge 검증 실패: ${challengeResult.reason}`);
@@ -109,6 +113,7 @@ exports.verifyLogin = async (username, challengeId, credential) => {
      WHERE u.username = ? AND p.credential_id = ?`,
     [username, credential.id]
   );
+  t.dbLookup = performance.now() - s; s = performance.now();
 
   const credentialMismatch = rows.length===0;
 
@@ -131,7 +136,7 @@ exports.verifyLogin = async (username, challengeId, credential) => {
       expectedChallenge: submittedChallenge, 
       expectedOrigin,
       expectedRPID: rpID,
-      requireUserVerification: false,
+      requireUserVerification: required,
       credential: {
         id: Buffer.from(passkey.credential_id, 'base64url'),
         publicKey: Buffer.from(passkey.public_key, 'base64url'),
@@ -143,6 +148,7 @@ exports.verifyLogin = async (username, challengeId, credential) => {
     console.error('오류 메시지:', error.message);
     throw new Error('서명 검증 실패');
   }
+  t.verify = performance.now() - s; s = performance.now();
 
   if (!verification.verified) {
     return { verified: false, credentialMismatch: false, signCountAbnormal: false };
@@ -173,6 +179,7 @@ exports.verifyLogin = async (username, challengeId, credential) => {
     'UPDATE passkeys SET counter = ? WHERE id = ?',
     [newCounter, passkey.id]
   );
+  t.counterUpdate = performance.now() - s;
 
   return { verified: true, credentialMismatch:false, signCountAbnormal: false };
 };

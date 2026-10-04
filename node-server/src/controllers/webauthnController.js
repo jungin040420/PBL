@@ -248,6 +248,16 @@ exports.loginStart = async (req, res) => {
 exports.loginFinish = async (req, res) => {
     const { username } = req.body;
 
+    const t = {};                           
+    const t0 = performance.now();            
+    let s = t0;                             
+    const setTiming = () => {                  
+        if (process.env.PERF_LOG !== 'true') return;
+        t.total = performance.now() - t0;
+        res.set('Server-Timing',
+            Object.entries(t).map(([k, v]) => `${k};dur=${v.toFixed(1)}`).join(', '));
+    };
+
     try {
         const {
             challengeId,
@@ -288,6 +298,8 @@ exports.loginFinish = async (req, res) => {
             context.country || 'UNKNOWN'
         ).trim().toUpperCase();
 
+        t.pre = performance.now() - s;
+
         const result =
             await verificationService.verifyLogin(
                 username,
@@ -296,6 +308,11 @@ exports.loginFinish = async (req, res) => {
             );
 
         console.log('verifyLogin 결과:', result);
+
+        Object.assign(t, result.timing);
+        s = performance.now();
+
+
 
         // 로그인 검증 실패
         if (!result.verified) {
@@ -710,7 +727,9 @@ exports.loginFinish = async (req, res) => {
             successregisteredType !==
             successcurrentType;
 
-        await authdb.query(
+            t.context = performance.now() - s; s = performance.now();
+
+            await authdb.query(
             `INSERT INTO access_logs
             (user_id, auth_result, reason)
             VALUES (?, 'success', ?)`,
@@ -745,6 +764,7 @@ exports.loginFinish = async (req, res) => {
                 auditError.message
             );
         }
+        t.audit = performance.now() - s;
 
         const loginFrequency =
             await redisClient.incr(
@@ -758,6 +778,8 @@ exports.loginFinish = async (req, res) => {
 
         context.loginFrequency =
             loginFrequency;
+
+        s = performance.now();
 
         let riskScore = 0;
         let riskLevel = 'LOW';
@@ -845,8 +867,10 @@ exports.loginFinish = async (req, res) => {
                 error.message
             );
         }
+        t.risk = performance.now() - s; s = performance.now();
 
         if (riskAction === 'BLOCKED') {
+            setTiming();
             return res.status(403).json({
                 success: false,
                 message:
@@ -884,6 +908,7 @@ exports.loginFinish = async (req, res) => {
                     context.fingerprint,
                     'RE_AUTH'
                 );
+                t.session = performance.now() - s; s = performance.now();
 
             try {
                 await otpService
@@ -896,6 +921,8 @@ exports.loginFinish = async (req, res) => {
                     'OTP 발송 실패:',
                     otpError.message
                 );
+                t.otp=performance.now() -s;
+                setTiming();
 
                 await sessionManager
                     .deleteSession(
@@ -965,6 +992,8 @@ exports.loginFinish = async (req, res) => {
                 context.userAgent,
                 fingerprint
             );
+            t.session=performance.now() - s;
+            setTiming();
 
         console.log(
             '세션 생성 결과:',
