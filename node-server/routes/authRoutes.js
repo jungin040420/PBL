@@ -9,6 +9,7 @@ router.post('/register/start', collectContext, authController.registerStart);
 router.post('/register/finish', collectContext, authController.registerFinish);
 router.post('/login/start', collectContext, authController.loginStart);
 router.post('/login/finish', collectContext, authController.loginFinish);
+router.post('/login/failure', collectContext, authController.loginFailure);
 router.post('/logout', authController.logout);
 router.post('/reauth/verify', collectContext, authController.reauthVerify);
 router.get('/verify', collectContext, authMiddleware, authController.verifySession);

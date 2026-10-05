@@ -2055,6 +2055,102 @@ def calculate_risk(
         ] = ml_risk_score
 
 
+    # ========================================================
+    # 복합 고위험 시나리오 보정
+    #
+    # B/N/D/T/C 평균화 과정에서 여러 위험 신호가 동시에
+    # 발생해도 점수가 지나치게 희석되는 문제를 보완한다.
+    # 기존 Rule 점수와 ML +20은 그대로 유지한다.
+    # ========================================================
+
+    network_changed = (
+        data.ipChanged
+        and data.regionChanged
+    )
+
+    foreign_login = (
+        bool(data.loginRegion)
+        and data.loginRegion.upper() != "KR"
+    )
+
+    secondary_high_risk = (
+        data.userAgentChanged
+        or data.isNewDevice
+        or (0 <= data.loginHour <= 5)
+        or data.signCountAbnormal
+        or data.credentialMismatch
+    )
+
+    # 단일 의미 있는 위험 신호가 확인되면
+    # 평균화로 ACTIVE까지 희석되지 않도록 RE_AUTH 최소점수를 적용한다.
+    # authenticationMethodChanged / loginFrequency는 정상 오탐 가능성이
+    # 있으므로 이 정책에는 사용하지 않는다.
+    reauth_signal = (
+        data.userAgentChanged
+        or data.isNewDevice
+        or data.ipChanged
+        or data.regionChanged
+        or (0 <= data.loginHour <= 5)
+        or data.signCountAbnormal
+        or data.credentialMismatch
+        or data.consecutiveFailureCount >= 3
+    )
+
+    if reauth_signal:
+        score = max(
+            score,
+            RISK_LOW_MAX + 1,
+        )
+
+        if "REAUTH_RISK_SIGNAL" not in triggers:
+            triggers.append(
+                "REAUTH_RISK_SIGNAL"
+            )
+
+        feature_scores[
+            "policyReauthFloor"
+        ] = RISK_LOW_MAX + 1
+
+
+    # 해외 접속 + IP/지역 동시 변경에 추가 위험 신호까지
+    # 존재하면 BLOCKED 최소점수를 적용한다.
+    if (
+        network_changed
+        and foreign_login
+        and secondary_high_risk
+    ):
+        score = max(
+            score,
+            RISK_MEDIUM_MAX + 1,
+        )
+
+        if "HIGH_RISK_COMBINATION" not in triggers:
+            triggers.append(
+                "HIGH_RISK_COMBINATION"
+            )
+
+        feature_scores[
+            "policyHighRiskFloor"
+        ] = RISK_MEDIUM_MAX + 1
+
+
+    # Blacklist IP는 독립적인 강한 위협 신호로 취급한다.
+    if data.blacklistIpDetected:
+        score = max(
+            score,
+            RISK_MEDIUM_MAX + 1,
+        )
+
+        if "BLACKLIST_POLICY_BLOCK" not in triggers:
+            triggers.append(
+                "BLACKLIST_POLICY_BLOCK"
+            )
+
+        feature_scores[
+            "blacklistPolicyFloor"
+        ] = RISK_MEDIUM_MAX + 1
+
+
     (
         risk_level,
         authentication_action,
