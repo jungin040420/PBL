@@ -2093,6 +2093,7 @@ def calculate_risk(
         or (0 <= data.loginHour <= 5)
         or data.signCountAbnormal
         or data.credentialMismatch
+        or data.consecutiveFailureCount >= 3
     )
 
     if reauth_signal:

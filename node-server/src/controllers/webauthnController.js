@@ -1270,3 +1270,55 @@ exports.reauthVerify = async (req, res) => {
         });
     }
 };
+// ============================================================
+// 브라우저 단계 Passkey 인증 취소/실패 기록
+// ============================================================
+exports.loginFailure = async (req, res) => {
+    try {
+        const { username, reason } = req.body;
+
+        if (!username) {
+            return res.status(400).json({
+                success: false,
+                error: 'username required'
+            });
+        }
+
+        const [rows] = await db.query(
+            'SELECT id FROM users WHERE username = ?',
+            [username]
+        );
+
+        if (!rows || rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'user not found'
+            });
+        }
+
+        const userId = rows[0].id;
+        const failKey = `login:fail:${userId}`;
+
+        const failureCount = await redisClient.incr(failKey);
+        await redisClient.expire(failKey, 3600);
+
+        console.log('[LOGIN_FAILURE_RECORDED]', {
+            username,
+            reason: reason || 'PASSKEY_FAILURE',
+            failureCount
+        });
+
+        return res.status(200).json({
+            success: true,
+            failureCount
+        });
+
+    } catch (error) {
+        console.error('loginFailure 오류:', error);
+
+        return res.status(500).json({
+            success: false,
+            error: '서버 오류'
+        });
+    }
+};

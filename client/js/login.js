@@ -36,6 +36,26 @@ async function generateFingerprint() {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+
+async function reportLoginFailure(username, reason) {
+  try {
+    const response = await fetch('/auth/login/failure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username,
+        reason
+      })
+    });
+
+    const result = await response.json();
+    console.log('[LOGIN_FAILURE_REPORTED]', result);
+
+  } catch (reportError) {
+    console.error('로그인 실패 기록 전송 오류:', reportError);
+  }
+}
+
 async function startPasskeyLogin() {
   const username = document.getElementById('username').value.trim();
 
@@ -58,17 +78,32 @@ async function startPasskeyLogin() {
     const rpId = window.location.hostname;
 
     setStatus('생체인증 팝업 대기 중...');
-    const credential = await navigator.credentials.get({
-      publicKey: {
-        challenge: base64ToUint8Array(options.challenge),
-        rpId: rpId,
-        userVerification: 'preferred',
-        allowCredentials: (options.allowCredentials || []).map(cred => ({
-          id: base64ToUint8Array(cred.id),
-          type: 'public-key',
-        })),
-      },
-    });
+    let credential;
+
+    try {
+      credential = await navigator.credentials.get({
+        publicKey: {
+          challenge: base64ToUint8Array(options.challenge),
+          rpId: rpId,
+          userVerification: 'preferred',
+          allowCredentials: (options.allowCredentials || []).map(cred => ({
+            id: base64ToUint8Array(cred.id),
+            type: 'public-key',
+          })),
+        },
+      });
+    } catch (authError) {
+      console.error('Passkey 인증 실패/취소:', authError);
+
+      const reason =
+        authError.name === 'NotAllowedError'
+          ? 'PASSKEY_CANCELLED'
+          : (authError.name || 'PASSKEY_AUTH_ERROR');
+
+      await reportLoginFailure(username, reason);
+
+      throw authError;
+    }
 
     const fingerprint = await generateFingerprint()
 
