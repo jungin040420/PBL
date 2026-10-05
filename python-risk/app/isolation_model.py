@@ -209,9 +209,22 @@ def save(
 
 # ============================================================
 # Model 로드
+#
+# 최초 요청 시에만 joblib.load()를 실행한다.
+# 이후 요청에서는 메모리에 캐싱된 모델을 재사용한다.
 # ============================================================
 
+_CACHED_MODEL: Optional[IsolationForest] = None
+
+
 def load() -> Optional[IsolationForest]:
+
+    global _CACHED_MODEL
+
+    # 이미 모델이 메모리에 있으면 다시 파일을 읽지 않는다.
+    if _CACHED_MODEL is not None:
+
+        return _CACHED_MODEL
 
     if not os.path.exists(
         MODEL_PATH
@@ -226,12 +239,20 @@ def load() -> Optional[IsolationForest]:
 
     try:
 
-        
-        model = joblib.load(
+        print(
+            "Isolation Forest 모델 최초 로드:",
+            MODEL_PATH,
+        )
+
+        _CACHED_MODEL = joblib.load(
             MODEL_PATH
         )
 
-        return model
+        print(
+            "Isolation Forest 모델 메모리 캐싱 완료"
+        )
+
+        return _CACHED_MODEL
 
     except Exception as error:
 
@@ -239,6 +260,8 @@ def load() -> Optional[IsolationForest]:
             "Isolation Forest 모델 로드 실패:",
             error,
         )
+
+        _CACHED_MODEL = None
 
         return None
 
@@ -422,6 +445,8 @@ def predict_anomaly_score(
     features: dict,
 ) -> Optional[dict]:
 
+    # 최초 호출에서는 모델을 파일에서 로드하고,
+    # 이후에는 load()가 캐싱된 모델을 반환한다.
     model = load()
 
     if model is None:
