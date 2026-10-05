@@ -21,7 +21,8 @@ const createSession = async (userId, ipHash, deviceIdHash, fingerprintHash, init
     status: initialStatus,
     ip: ipHash,
     deviceId: deviceIdHash,
-    fingerprint: fingerprintHash,
+    ipBindHash,
+    uaBindHash,
   });
 
   await redisClient.set(key, data, { EX: TTL.SESSION });

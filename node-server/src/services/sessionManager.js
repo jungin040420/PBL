@@ -6,15 +6,17 @@ const {
   updateSessionStatus,
   deleteSession: _deleteSession
 } = require('./session');
+const { anonymizeRandom, hashForSessionBinding } = require('../utils/anonymize');
+
 
 exports.createSession = async (userId, ip, userAgent, fingerprint, initialStatus = 'ACTIVE') => {
-  const ipHash = hashForSessionBinding(ip || '');
-  const uaHash = hashForSessionBinding(userAgent || '');
-  const fpHash = hashForSessionBinding(fingerprint || '');
+  const ipHash = anonymizeRandom(ip || '');
+  const deviceIdHash = anonymizeRandom(fingerprint || '');
+  const ipBindHash = hashForSessionBinding(ip || '');
+  const uaBindHash = hashForSessionBinding(userAgent || '');
 
-  const sessionId = await createSession(userId, ipHash, uaHash, fpHash, initialStatus);
-  const token = `${userId}:${sessionId}`;
-  return { token };
+  const sessionId = await createSession(userId, ipHash, deviceIdHash, ipBindHash, uaBindHash, initialStatus);
+  return { token: `${userId}:${sessionId}` };
 };
 
 exports.verifySession = async (token, currentIp, currentUserAgent) => {
