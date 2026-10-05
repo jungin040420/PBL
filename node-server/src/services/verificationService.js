@@ -136,7 +136,7 @@ exports.verifyLogin = async (username, challengeId, credential) => {
       expectedChallenge: submittedChallenge, 
       expectedOrigin,
       expectedRPID: rpID,
-      requireUserVerification: required,
+      requireUserVerification: false,
       credential: {
         id: Buffer.from(passkey.credential_id, 'base64url'),
         publicKey: Buffer.from(passkey.public_key, 'base64url'),

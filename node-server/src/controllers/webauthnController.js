@@ -722,10 +722,10 @@ exports.loginFinish = async (req, res) => {
         const successcurrentType =
             credential.authenticatorAttachment ||
             'unknown';
-
         context.authenticationMethodChanged =
-            successregisteredType !==
-            successcurrentType;
+            successregisteredType !== 'unknown' &&
+            successcurrentType !== 'unknown' &&
+            successregisteredType !== successcurrentType;
 
             t.context = performance.now() - s; s = performance.now();
 
