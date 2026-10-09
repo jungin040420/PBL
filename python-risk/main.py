@@ -1410,7 +1410,7 @@ def normalize_response_time(
     ):
         return 100.0
 
-    if challenge_response_time > 5000:
+    if challenge_response_time > 30000:
         return 50.0
 
     return 0.0
@@ -1447,12 +1447,9 @@ def normalize_login_region(
     login_region: str,
 ) -> float:
 
-    if (
-        login_region
-        and
-        login_region.upper()
-        == "KR"
-    ):
+    region = (login_region or "").strip().upper()
+
+    if region in ("KR", "UNKNOWN", ""):
         return 0.0
 
     return 100.0
@@ -1491,6 +1488,22 @@ def average_score(
     )
 
 
+
+def cumulative_risk_score(items):
+    """Calculate cumulative risk using per-feature severity."""
+    remaining = 1.0
+
+    for normalized_score, severity in items:
+        effective_risk = (
+            clamp_score(normalized_score)
+            * clamp_score(severity)
+            / 10000.0
+        )
+        remaining *= 1.0 - effective_risk
+
+    return clamp_score(100.0 * (1.0 - remaining))
+
+
 # ============================================================
 # B / N / D / T / C 영역 점수 계산
 # ============================================================
@@ -1503,94 +1516,37 @@ def calculate_trust_score(
     List[str],
 ]:
 
-    behavior_score = average_score(
-        [
-            normalize_login_frequency(
-                data.loginFrequency
-            ),
+    # Severity-based cumulative risk scoring
+    behavior_score = cumulative_risk_score([
+        (normalize_login_frequency(data.loginFrequency), 5),
+        (normalize_login_failure(data.failedLoginCount), 40),
+        (normalize_response_time(data.challengeResponseTime), 10),
+        (boolean_risk(data.authenticationMethodChanged), 30),
+        (inverse_boolean_risk(data.hasPreviousContext), 20),
+    ])
 
-            normalize_login_failure(
-                data.failedLoginCount
-            ),
+    network_score = cumulative_risk_score([
+        (boolean_risk(data.ipChanged), 60),
+        (boolean_risk(data.regionChanged), 70),
+    ])
 
-            normalize_response_time(
-                data.challengeResponseTime
-            ),
+    device_score = cumulative_risk_score([
+        (boolean_risk(data.signCountAbnormal), 90),
+        (boolean_risk(data.credentialMismatch), 90),
+        (boolean_risk(data.userAgentChanged), 50),
+        (boolean_risk(data.isNewDevice), 70),
+    ])
 
-            boolean_risk(
-                data.authenticationMethodChanged
-            ),
+    threat_score = cumulative_risk_score([
+        (normalize_login_failure(data.consecutiveFailureCount), 90),
+        (boolean_risk(data.blacklistIpDetected), 100),
+    ])
 
-            inverse_boolean_risk(
-                data.hasPreviousContext
-            ),
-        ]
-    )
-
-
-    network_score = average_score(
-        [
-            boolean_risk(
-                data.ipChanged
-            ),
-
-            boolean_risk(
-                data.regionChanged
-            ),
-        ]
-    )
-
-
-    device_score = average_score(
-        [
-            boolean_risk(
-                data.signCountAbnormal
-            ),
-
-            boolean_risk(
-                data.credentialMismatch
-            ),
-
-            boolean_risk(
-                data.userAgentChanged
-            ),
-
-            boolean_risk(
-                data.isNewDevice
-            ),
-        ]
-    )
-
-
-    threat_score = average_score(
-        [
-            normalize_login_failure(
-                data.consecutiveFailureCount
-            ),
-
-            boolean_risk(
-                data.blacklistIpDetected
-            ),
-        ]
-    )
-
-
-    context_score = average_score(
-        [
-            normalize_login_hour(
-                data.loginHour
-            ),
-
-            normalize_day_of_week(
-                data.dayOfWeek
-            ),
-
-            normalize_login_region(
-                data.loginRegion
-            ),
-        ]
-    )
-
+    context_score = cumulative_risk_score([
+        (normalize_login_hour(data.loginHour), 40),
+        (normalize_day_of_week(data.dayOfWeek), 5),
+        (normalize_login_region(data.loginRegion), 40),
+    ])
 
     weighted_behavior = (
         WB
@@ -1618,7 +1574,7 @@ def calculate_trust_score(
     )
 
 
-    rule_score = (
+    base_rule_score = (
         weighted_behavior
         + weighted_network
         + weighted_device
@@ -1626,6 +1582,38 @@ def calculate_trust_score(
         + weighted_context
     )
 
+    # Cross-domain risk: multiple independent risk domains
+    # increase the combined risk without changing base weights.
+    cross_domain_score = 100.0 * (
+        1.0
+        - (1.0 - network_score / 100.0)
+        * (1.0 - device_score / 100.0)
+        * (1.0 - threat_score / 100.0)
+    )
+
+    # Trial formula: preserve the weighted baseline,
+    # then account for simultaneous cross-domain signals.
+    combination_bonus = max(
+        0.0,
+        cross_domain_score
+        - max(network_score, device_score, threat_score)
+    )
+
+    # Trial: signal-level severity contribution
+    signal_risk = cumulative_risk_score([
+        (boolean_risk(data.userAgentChanged), 35),
+        (boolean_risk(data.isNewDevice), 40),
+        (boolean_risk(data.ipChanged), 20),
+        (boolean_risk(data.regionChanged), 25),
+        (normalize_login_failure(data.consecutiveFailureCount), 55),
+        (boolean_risk(data.blacklistIpDetected), 100),
+    ])
+
+    # Avoid adding the same risk twice at full strength.
+    rule_score = max(
+        base_rule_score + combination_bonus,
+        signal_risk,
+    )
 
     rule_score = int(
         round(
@@ -2069,8 +2057,8 @@ def calculate_risk(
     )
 
     foreign_login = (
-        bool(data.loginRegion)
-        and data.loginRegion.upper() != "KR"
+        (data.loginRegion or "").strip().upper()
+        not in ("KR", "UNKNOWN", "")
     )
 
     secondary_high_risk = (
