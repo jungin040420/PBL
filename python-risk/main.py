@@ -1410,9 +1410,6 @@ def normalize_response_time(
     ):
         return 100.0
 
-    if challenge_response_time > 30000:
-        return 50.0
-
     return 0.0
 
 
@@ -1719,16 +1716,11 @@ def calculate_trust_score(
         data.challengeResponseTime
         is not None
         and
-        (
             (
                 0
                 < data.challengeResponseTime
                 < 300
             )
-            or
-            data.challengeResponseTime
-            > 5000
-        )
     ):
 
         triggers.append(
