@@ -2078,7 +2078,6 @@ def calculate_risk(
         or data.isNewDevice
         or data.ipChanged
         or data.regionChanged
-        or (0 <= data.loginHour <= 5)
         or data.signCountAbnormal
         or data.credentialMismatch
         or data.consecutiveFailureCount >= 3
