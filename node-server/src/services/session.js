@@ -8,7 +8,7 @@ const TTL = {
 };
 
 // 세션 생성 (로그인 성공 시 호출)
-const createSession = async (userId, ipHash, deviceIdHash, fingerprintHash, initialStatus = 'ACTIVE') => {
+const createSession = async (userId, ipHash, deviceIdHash, ipBindHash, uaBindHash, initialStatus = 'ACTIVE') => {
   const { v4: uuidv4 } = require('uuid');
   const sessionId = uuidv4();
   const key = `session:${userId}:${sessionId}`;
