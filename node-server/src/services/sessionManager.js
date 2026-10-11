@@ -1,5 +1,4 @@
 const { redisClient, db } = require('../../config/db');
-const { hashForSessionBinding } = require('../utils/anonymize');
 const {
   createSession,
   refreshSession,
