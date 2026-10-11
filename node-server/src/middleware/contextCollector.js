@@ -58,19 +58,6 @@ const collectContext = (req, res, next) => {
     country,
   };
 
-  console.log('[GEOIP DEBUG]', {
-    cloudflareIp: req.headers['cf-connecting-ip'] || null,
-    realIp: req.headers['x-real-ip'] || null,
-    forwardedFor: req.headers['x-forwarded-for'] || null,
-    requestClientIp: requestClientIp || null,
-    expressIp: req.ip || null,
-    remoteAddress: req.socket?.remoteAddress || null,
-    rawIp,
-    normalizedIp: ip,
-    geoResult: geo,
-    detectedCountry: country,
-  });
-
   console.log('[CONTEXT DEBUG]', {
     hasIp: Boolean(ip),
     hasUserAgent: Boolean(userAgent),
@@ -96,31 +83,19 @@ const parseUserAgent = (userAgent) => {
 
   let deviceType = 'desktop';
 
-  if (isMobile) {
-    deviceType = 'mobile';
-  }
+  if (isMobile) {deviceType = 'mobile';}
 
-  if (isTablet) {
-    deviceType = 'tablet';
-  }
+  if (isTablet) {deviceType = 'tablet';}
 
   let os = 'unknown';
 
-  if (isWindows) {
-    os = 'windows';
-  }
+  if (isWindows) {os = 'windows';}
 
-  if (isMac) {
-    os = 'mac';
-  }
+  if (isMac) {os = 'mac';}
 
-  if (isAndroid) {
-    os = 'android';
-  }
+  if (isAndroid) {os = 'android';}
 
-  if (isIOS) {
-    os = 'ios';
-  }
+  if (isIOS) {os = 'ios';}
 
   return {
     deviceType,
