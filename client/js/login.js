@@ -84,8 +84,8 @@ async function startPasskeyLogin() {
       credential = await navigator.credentials.get({
         publicKey: {
           challenge: base64ToUint8Array(options.challenge),
-          rpId: rpId,
-          userVerification: 'preferred',
+          rpId: options.rpId,
+          userVerification: 'required',
           allowCredentials: (options.allowCredentials || []).map(cred => ({
             id: base64ToUint8Array(cred.id),
             type: 'public-key',
@@ -120,6 +120,7 @@ async function startPasskeyLogin() {
           id: credential.id,
           rawId: toBase64url(credential.rawId),
           type: credential.type,
+          authenticatorAttachment: credential.authenticatorAttachment || null,
           response: {
             clientDataJSON: toBase64url(
               credential.response.clientDataJSON

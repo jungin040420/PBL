@@ -205,7 +205,7 @@ exports.loginFinish = async (req, res) => {
 
             await authdb.query(
                 `INSERT INTO access_logs 
-                (user_id, auth_result, reason)
+                (user_id, aut h_result, reason)
                 VALUES (?, 'fail', ?)`,
                 [failUserIdHash, result.reason || 'VERIFICATION_FAILED']
             );
@@ -261,7 +261,7 @@ exports.loginFinish = async (req, res) => {
             }
 
             const failCurrentType = credential?.authenticatorAttachment || 'unknown';
-            context.authenticationMethodChanged = (!registeredPasskey || failCurrentType === 'unknown');
+            context.authenticationMethodChanged = false;
 
             if (userId) {
                 await redisClient.incr(`login:fail:${userId}`);
@@ -280,7 +280,6 @@ exports.loginFinish = async (req, res) => {
             });
         }
 
-        // 검증 성공인데 사용자가 없는 경우 (stepup 조회보다 먼저 차단)
         if (!userId) {
             return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
         }
@@ -376,7 +375,14 @@ exports.loginFinish = async (req, res) => {
         if (currentCountry !== 'UNKNOWN') {
             nextContext.countryHash = String(currentCountryHash);
         }
-        await redisClient.hSet(contextKey, nextContext);
+        
+        const newContext = {                       
+            deviceHash: String(currentDeviceHash || ''),
+            ipHash: String(currentIpHash || ''),
+            uaHash: String(currentUaHash || ''),
+            countryHash: String(currentCountryHash || ''),
+            country: currentCountry
+        };
         await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
 
         let successregisteredType = 'unknown';
@@ -392,7 +398,7 @@ exports.loginFinish = async (req, res) => {
             console.error('authenticator_type 조회 실패:', e.message);
         }
         const successcurrentType = credential.authenticatorAttachment || 'unknown';
-        context.authenticationMethodChanged = successregisteredType !== successcurrentType;
+        context.authenticationMethodChanged = successregisteredType !== 'unknown' && successcurrentType !== 'unknown' && successregisteredType !== successcurrentType;
 
         t.context = performance.now() - s; s = performance.now();
 
@@ -419,7 +425,7 @@ exports.loginFinish = async (req, res) => {
         t.audit = performance.now() - s;
 
         const loginFrequency = await redisClient.incr(`login:count:${userId}`);
-        await redisClient.expire(`login:count:${userId}`, 3600);
+        await redisClient.expire(`login:count:${userId}`, 3600, 'NX');
         context.loginFrequency = loginFrequency;
 
         s = performance.now();
@@ -498,6 +504,11 @@ exports.loginFinish = async (req, res) => {
             t.otp = performance.now() - s;
             setTiming();
 
+            await redisClient.set(                                  
+                `pendingcontext:${userId}`,
+                JSON.stringify({ contextKey, ...newContext }),
+                { EX: 180 }
+            );
             const isNgrok = req.headers.host?.includes('ngrok');
             res.cookie('session', session.token, {
                 httpOnly: true,
@@ -520,6 +531,8 @@ exports.loginFinish = async (req, res) => {
             });
         }
 
+        await redisClient.hSet(contextKey, newContext);
+        await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
         const session = await sessionManager.createSession(
             userId, context.ip, context.userAgent, fingerprint
         );
@@ -647,6 +660,13 @@ exports.reauthVerify = async (req, res) => {
         }
 
         await sessionManager.updateSessionStatus(userId, sessionId, 'ACTIVE');
+        const pending = await redisClient.get(`pendingcontext:${userId}`);  
+        if (pending) {                                                     
+            const { contextKey, ...ctx } = JSON.parse(pending);
+            await redisClient.hSet(contextKey, ctx);
+            await redisClient.expire(contextKey, 60 * 60 * 24 * 30);
+            await redisClient.del(`pendingcontext:${userId}`);
+        }
         return res.status(200).json({ success: true, message: '인증 완료' });
 
     } catch (error) {
