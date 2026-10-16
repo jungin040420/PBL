@@ -281,3 +281,9 @@ async function submitOtp() {
 }
 
 window.submitOtp = submitOtp;
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (new URLSearchParams(location.search).get('test') === '1') {
+    document.getElementById('testLabelArea').style.display = 'block';
+  }
+});
