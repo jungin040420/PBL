@@ -1997,6 +1997,7 @@ def calculate_risk(
     ) = calculate_trust_score(
         data
     )
+    rule_score_before_ml = score
     t["rule"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 
 
