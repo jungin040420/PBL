@@ -163,3 +163,11 @@ CREATE TABLE IF NOT EXISTS ml_predictions (
     DEFAULT CHARSET=utf8mb4
     COLLATE=utf8mb4_unicode_ci
     COMMENT='Isolation Forest 추론 결과';
+
+CREATE TABLE ml_labels (
+    event_id    VARCHAR(64)  NOT NULL PRIMARY KEY,
+    label       ENUM('NORMAL', 'ABNORMAL') NOT NULL,
+    source      VARCHAR(20)  NOT NULL DEFAULT 'MANUAL',
+    scenario    VARCHAR(100) NULL,
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

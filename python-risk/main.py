@@ -74,6 +74,7 @@ RISK_MEDIUM_MAX = int(
     )
 )
 
+ML_SHADOW_MODE = os.getenv("ML_SHADOW_MODE", "false") == "true"
 
 if not (
     0
@@ -680,6 +681,8 @@ def save_ml_feature_log(
 def save_ml_prediction(
     event_id: str,
     ml_result: dict,
+    rule_only_action: str,
+    with_ml_action: str,
 ) -> None:
 
     if not DB_PASSWORD:
@@ -742,9 +745,13 @@ def save_ml_prediction(
                 anomaly_score,
                 anomaly_label,
                 model_version,
-                top_anomaly_features
+                top_anomaly_features,
+                rule_only_action,
+                with_ml_action
             )
             VALUES (
+                %s,
+                %s,
                 %s,
                 %s,
                 %s,
@@ -759,6 +766,8 @@ def save_ml_prediction(
             anomaly_label,
             model_version,
             None,
+            rule_only_action,
+            with_ml_action,
         )
 
         with connection.cursor() as cursor:
@@ -2005,17 +2014,21 @@ def calculate_risk(
     t["ml"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 
 
-    if (
-        ml_result[
-            "ml_model_used"
-        ]
-        and
-        ml_result[
-            "ml_is_anomaly"
-        ] is True
-    ):
+    ml_flagged = (                                     # ← 수정
+        ml_result["ml_model_used"]
+        and ml_result["ml_is_anomaly"] is True
+    )
 
+    if ml_flagged and ML_SHADOW_MODE:
+        triggers.append("ML_ANOMALY_SHADOW")
+        feature_scores["mlAnomalyShadow"] = 20
+
+    elif ml_flagged:
         ml_risk_score = 20
+        score += ml_risk_score
+        score = min(score, 100)
+        triggers.append("ML_ANOMALY_DETECTED")
+        feature_scores["mlAnomaly"] = ml_risk_score
 
         score += (
             ml_risk_score
@@ -2129,6 +2142,19 @@ def calculate_risk(
             "blacklistPolicyFloor"
         ] = RISK_MEDIUM_MAX + 1
 
+    floor_value = max(                           
+        feature_scores.get("policyReauthFloor", 0),
+        feature_scores.get("policyHighRiskFloor", 0),
+        feature_scores.get("blacklistPolicyFloor", 0),
+    )
+    rule_only_score = max(rule_score_before_ml, floor_value)
+    with_ml_score = max(
+        min(rule_score_before_ml + (20 if ml_flagged else 0), 100),
+        floor_value,
+    )
+    rule_only_action = determine_authentication_policy(rule_only_score)[1]
+    with_ml_action = determine_authentication_policy(with_ml_score)[1]
+
 
     (
         risk_level,
@@ -2209,6 +2235,8 @@ def calculate_risk(
     save_ml_prediction(
         event_id,
         ml_result,
+        rule_only_action,
+        with_ml_action
     )
     t["db_pred"] = (time.perf_counter() - s) * 1000; s = time.perf_counter()
 

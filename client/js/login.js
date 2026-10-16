@@ -116,6 +116,8 @@ async function startPasskeyLogin() {
         username,
         challengeId: options.challengeId,
         fingerprint,
+        testLabel: document.getElementById('isAbnormal')?.checked ? 'ABNORMAL' : null,
+        testScenario: document.getElementById('testScenario')?.value || null,            
         credential: {
           id: credential.id,
           rawId: toBase64url(credential.rawId),

@@ -17,6 +17,7 @@ services:
 
     environment:
       - NODE_ENV=development
+      - TEST_LABEL_ENABLED=true
 
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
@@ -78,6 +79,9 @@ services:
 
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+
+      - ML_SHADOW_MODE=true
+      - TEST_LABEL_ENABLED=true
 
       # ======================================================
       # F-07 Risk 인증 정책

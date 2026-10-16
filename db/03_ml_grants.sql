@@ -37,6 +37,9 @@ GRANT INSERT ON ml_db.ml_predictions  TO 'ml_writer'@'%';
 GRANT SELECT ON ml_db.ml_feature_logs TO 'ml_reader'@'%';
 GRANT SELECT ON ml_db.ml_predictions  TO 'ml_reader'@'%';
 
+GRANT INSERT ON ml_db.ml_labels TO 'ml_writer'@'%';
+GRANT SELECT ON ml_db.ml_labels TO 'ml_reader'@'%';
+
 
 -- 4. 적용 -------------------------------------------------------------
 FLUSH PRIVILEGES;
